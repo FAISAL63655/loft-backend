@@ -1,1 +1,38 @@
+# Encore build output
 /.encore
+
+# Environment variables (development only - use Encore Secrets for production)
+.env
+.env.local
+
+# Go modules
+vendor/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Database dumps
+*.sql.bak
+*.dump
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Build artifacts
+dist/
+build/
