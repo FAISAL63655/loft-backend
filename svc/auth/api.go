@@ -5,8 +5,8 @@ import (
 	"context"
 	"strconv"
 
+	"encore.app/pkg/errs"
 	"encore.dev/beta/auth"
-	"encore.dev/beta/errs"
 )
 
 // Register creates a new user account
@@ -42,15 +42,15 @@ func (s *Service) RefreshToken(ctx context.Context, req *RefreshTokenRequest) (*
 //encore:api auth method=POST path=/auth/logout
 func (s *Service) Logout(ctx context.Context) (*LogoutResponse, error) {
 	// Get user ID from auth context
-	userID, _ := auth.UserID()
+	userID, ok := auth.UserID()
+	if !ok {
+		return nil, errs.E(ctx, "AUTH_UNAUTHENTICATED", "المستخدم غير مصادق.")
+	}
 
 	// Convert auth.UID (string) to int64
 	userIDInt64, err := strconv.ParseInt(string(userID), 10, 64)
 	if err != nil {
-		return nil, &errs.Error{
-			Code:    errs.Internal,
-			Message: "Invalid user ID format.",
-		}
+		return nil, errs.E(ctx, "AUTH_AUTH_ID_INVALID", "معرّف المستخدم غير صالح.")
 	}
 
 	return s.LogoutUser(ctx, userIDInt64)

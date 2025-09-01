@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
+	"encore.app/pkg/errs"
 	"encore.dev/beta/auth"
-	"encore.dev/beta/errs"
 )
 
 // AuthData represents the authentication data passed to authenticated endpoints
@@ -27,19 +27,13 @@ func (s *Service) AuthHandler(ctx context.Context, token string) (auth.UID, *Aut
 	// Validate the access token
 	claims, err := s.jwtManager.ValidateAccessToken(token)
 	if err != nil {
-		return "", nil, &errs.Error{
-			Code:    errs.Unauthenticated,
-			Message: "Invalid or expired access token.",
-		}
+		return "", nil, errs.E(ctx, "AUTH_INVALID_TOKEN", "رمز الدخول غير صالح أو منتهي.")
 	}
 
 	// Check if user still exists and is active
 	exists, err := s.repo.UserExistsByID(ctx, claims.UserID)
 	if err != nil || !exists {
-		return "", nil, &errs.Error{
-			Code:    errs.Unauthenticated,
-			Message: "User account not found or inactive.",
-		}
+		return "", nil, errs.E(ctx, "AUTH_USER_NOT_ACTIVE", "حساب المستخدم غير موجود أو غير نشط.")
 	}
 
 	// Convert user ID to string for auth.UID

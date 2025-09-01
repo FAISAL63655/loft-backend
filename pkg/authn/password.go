@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Argon2id parameters for secure password hashing
@@ -58,21 +59,35 @@ func HashPassword(password string) (string, error) {
 
 // VerifyPassword verifies if the given password matches the hash
 func VerifyPassword(password, hash string) error {
-	// Parse the hash to extract parameters
-	salt, hashBytes, memory, time, parallelism, err := parseHash(hash)
-	if err != nil {
-		return err
+	// Support both Argon2id (preferred) and bcrypt for backward compatibility
+	if strings.HasPrefix(hash, "$argon2id$") {
+		// Parse the hash to extract parameters
+		salt, hashBytes, memory, time, parallelism, err := parseHash(hash)
+		if err != nil {
+			return err
+		}
+
+		// Generate hash with the same parameters
+		computedHash := argon2.IDKey([]byte(password), salt, time, memory, parallelism, keyLength)
+
+		// Compare hashes using constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare(hashBytes, computedHash) == 1 {
+			return nil
+		}
+
+		return ErrHashMismatch
 	}
 
-	// Generate hash with the same parameters
-	computedHash := argon2.IDKey([]byte(password), salt, time, memory, parallelism, keyLength)
-
-	// Compare hashes using constant-time comparison to prevent timing attacks
-	if subtle.ConstantTimeCompare(hashBytes, computedHash) == 1 {
+	// Fallback to bcrypt if hash indicates bcrypt format
+	if strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2y$") {
+		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+			return ErrHashMismatch
+		}
 		return nil
 	}
 
-	return ErrHashMismatch
+	// Unknown hash format
+	return ErrInvalidHash
 }
 
 // parseHash parses the Argon2id hash string and extracts parameters

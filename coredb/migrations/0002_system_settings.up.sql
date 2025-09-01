@@ -32,6 +32,8 @@ INSERT INTO system_settings (key, value, description, allowed_values) VALUES
 ('ws.enabled', 'true', 'تفعيل WebSocket للإشعارات المباشرة', ARRAY['true', 'false']),
 ('ws.max_connections', '1000', 'الحد الأقصى لاتصالات WebSocket المتزامنة', NULL),
 ('ws.heartbeat_interval', '30', 'فترة نبضة القلب بالثواني', NULL),
+('ws.max_connections_per_host', '120', 'الحد الأقصى لاتصالات WebSocket لكل مضيف', NULL),
+('ws.msgs_per_minute', '30', 'الحد الأقصى لرسائل WS في الدقيقة لكل مضيف', NULL),
 
 -- إعدادات المدفوعات
 ('payments.enabled', 'true', 'تفعيل نظام المدفوعات', ARRAY['true', 'false']),
@@ -49,9 +51,9 @@ INSERT INTO system_settings (key, value, description, allowed_values) VALUES
 ('media.max_file_size', '10485760', 'الحد الأقصى لحجم الملف بالبايت (10MB)', NULL),
 ('media.allowed_types', 'image/jpeg,image/png,image/webp,video/mp4', 'أنواع الملفات المسموحة', NULL),
 ('media.storage_provider', 'local', 'مزود تخزين الوسائط', ARRAY['local', 's3', 'cloudinary']),
-('media.watermark_enabled', 'true', 'تفعيل العلامة المائية', ARRAY['true', 'false']),
-('media.watermark_position', 'bottom-right', 'موضع العلامة المائية', ARRAY['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center']),
-('media.watermark_opacity', '0.7', 'شفافية العلامة المائية (0.0-1.0)', NULL),
+('media.watermark.enabled', 'true', 'تفعيل العلامة المائية', ARRAY['true', 'false']),
+('media.watermark.position', 'bottom-right', 'موضع العلامة المائية', ARRAY['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center']),
+('media.watermark.opacity', '30', 'شفافية العلامة المائية (0..100 كنسبة مئوية)', NULL),
 
 -- إعدادات عامة
 ('app.name', 'لوفت الدغيري', 'اسم التطبيق', NULL),
@@ -74,6 +76,7 @@ INSERT INTO system_settings (key, value, description, allowed_values) VALUES
 ('auctions.min_bid_increment', '10.00', 'الحد الأدنى لزيادة المزايدة', NULL),
 ('auctions.auto_extend_enabled', 'true', 'تفعيل التمديد التلقائي للمزاد', ARRAY['true', 'false']),
 ('auctions.auto_extend_duration', '300', 'مدة التمديد التلقائي بالثواني', NULL),
+('auctions.anti_sniping_minutes', '10', 'مدة تمديد المزاد بالدقائق عند المزايدة في الدقائق الأخيرة', NULL),
 
 -- إعدادات VAT والشحن وجلسة الدفع ومحفوظات الإشعارات
 ('vat.enabled', 'true', 'تفعيل ضريبة القيمة المضافة', ARRAY['true', 'false']),
@@ -81,4 +84,16 @@ INSERT INTO system_settings (key, value, description, allowed_values) VALUES
 ('shipping.free_shipping_threshold', '300.00', 'عتبة الشحن المجاني (المجموع الشامل قبل الشحن)', NULL),
 ('auctions.max_extensions', '0', 'الحد الأقصى لتمديدات Anti-Sniping (0=غير محدود)', NULL),
 ('payments.session_ttl_minutes', '30', 'صلاحية جلسة الدفع بالدقائق', NULL),
-('notifications.email.retention_days', '7', 'عدد أيام الاحتفاظ بإشعارات البريد', NULL);
+('payments.idempotency_ttl_hours', '24', 'مدة الاحتفاظ بمفاتيح Idempotency بالساعات', NULL),
+('notifications.email.retention_days', '7', 'عدد أيام الاحتفاظ بإشعارات البريد', NULL),
+('bids.rate_limit_per_minute', '60', 'حد المزايدات لكل مستخدم في الدقيقة', NULL),
+('payments.rate_limit_per_5min', '5', 'حد تهيئة الدفع لكل مستخدم خلال 5 دقائق', NULL),
+
+-- إعدادات المخزون والسلة
+('stock.checkout_hold_minutes', '10', 'مدة حجز الحمام بالدقائق', NULL),
+('stock.supplies_hold_minutes', '15', 'مدة حجز المستلزمات بالدقائق', NULL),
+('stock.max_active_holds_per_user', '5', 'الحد الأقصى للحجوزات النشطة لكل مستخدم', NULL),
+
+-- إعدادات إضافية
+('media.thumbnails.enabled', 'true', 'تفعيل إنشاء المصغّرات عند الرفع', ARRAY['true','false']),
+('pay.methods', '["mada","credit_card","applepay"]', 'طرق الدفع المفعّلة', NULL);

@@ -217,7 +217,7 @@ CREATE TRIGGER prevent_user_deletion_with_active_data_trigger
     BEFORE DELETE ON users
     FOR EACH ROW EXECUTE FUNCTION prevent_user_deletion_with_active_data();
 
--- دالة لتسجيل العمليات الحساسة تلقائياً
+-- دالة لتسجيل العمليات الحساسة تلقائياً (مُصححة)
 CREATE OR REPLACE FUNCTION auto_audit_sensitive_operations()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -225,53 +225,63 @@ DECLARE
     entity_type_name TEXT;
     entity_id_val TEXT;
     actor_id BIGINT;
+    old_status_val TEXT;
+    new_status_val TEXT;
 BEGIN
     -- تحديد نوع العملية والكيان
     CASE TG_TABLE_NAME
         WHEN 'bids' THEN
             entity_type_name := 'bid';
-            entity_id_val := NEW.id::TEXT;
-            actor_id := NEW.user_id;
             IF TG_OP = 'INSERT' THEN
+                entity_id_val := NEW.id::TEXT;
+                actor_id := NEW.user_id;
                 action_name := 'bid_placed';
             ELSIF TG_OP = 'DELETE' THEN
-                action_name := 'bid_removed';
                 entity_id_val := OLD.id::TEXT;
                 actor_id := NULL; -- الحذف إداري
+                action_name := 'bid_removed';
             END IF;
         WHEN 'auctions' THEN
             entity_type_name := 'auction';
-            entity_id_val := NEW.id::TEXT;
-            IF TG_OP = 'UPDATE' AND OLD.status != NEW.status THEN
-                action_name := 'auction_status_changed';
+            IF TG_OP = 'UPDATE' THEN
+                entity_id_val := NEW.id::TEXT;
+                IF OLD.status != NEW.status THEN
+                    action_name := 'auction_status_changed';
+                    old_status_val := OLD.status;
+                    new_status_val := NEW.status;
+                END IF;
             END IF;
         WHEN 'payments' THEN
             entity_type_name := 'payment';
-            entity_id_val := NEW.id::TEXT;
-            IF TG_OP = 'UPDATE' AND OLD.status != NEW.status THEN
-                action_name := 'payment_status_changed';
+            IF TG_OP = 'UPDATE' THEN
+                entity_id_val := NEW.id::TEXT;
+                IF OLD.status != NEW.status THEN
+                    action_name := 'payment_status_changed';
+                    old_status_val := OLD.status;
+                    new_status_val := NEW.status;
+                END IF;
             END IF;
         ELSE
             RETURN COALESCE(NEW, OLD);
     END CASE;
-    
+
     -- إدراج سجل التدقيق
     IF action_name IS NOT NULL THEN
         INSERT INTO audit_logs (
-            actor_user_id, action, entity_type, entity_id, 
+            actor_user_id, action, entity_type, entity_id,
             meta, created_at
         ) VALUES (
             actor_id, action_name, entity_type_name, entity_id_val,
             jsonb_build_object(
-                'old_status', CASE WHEN TG_OP = 'UPDATE' THEN OLD.status ELSE NULL END,
-                'new_status', CASE WHEN TG_OP != 'DELETE' THEN NEW.status ELSE NULL END,
+                'old_status', old_status_val,
+                'new_status', new_status_val,
                 'table', TG_TABLE_NAME,
                 'operation', TG_OP
             ),
             NOW()
         );
     END IF;
-    
+
     RETURN COALESCE(NEW, OLD);
 END;
 $$ LANGUAGE plpgsql;

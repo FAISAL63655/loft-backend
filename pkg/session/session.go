@@ -2,12 +2,12 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -24,12 +24,15 @@ type SessionData struct {
 	UserID       int64                  `json:"user_id"`
 	Role         string                 `json:"role"`
 	Email        string                 `json:"email"`
+	AccessToken  string                 `json:"access_token"`
 	RefreshToken string                 `json:"refresh_token"`
 	CreatedAt    time.Time              `json:"created_at"`
 	ExpiresAt    time.Time              `json:"expires_at"`
 	LastUsedAt   time.Time              `json:"last_used_at"`
 	IPAddress    string                 `json:"ip_address,omitempty"`
 	UserAgent    string                 `json:"user_agent,omitempty"`
+	IPChanges    int                    `json:"ip_changes,omitempty"`     // Number of IP changes
+	LastIPChange time.Time              `json:"last_ip_change,omitempty"` // Time of last IP change
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -43,28 +46,91 @@ type SessionConfig struct {
 	HttpOnly        bool          `json:"http_only"`
 	SameSite        http.SameSite `json:"same_site"`
 	CleanupInterval time.Duration `json:"cleanup_interval"`
+	StrictIPBinding bool          `json:"strict_ip_binding"` // Require IP to match
+	StrictUABinding bool          `json:"strict_ua_binding"` // Require UserAgent to match
+	AllowIPChange   bool          `json:"allow_ip_change"`   // Allow IP changes (for mobile users)
+	MaxIPChanges    int           `json:"max_ip_changes"`    // Max IP changes allowed per session
 }
 
 // SessionManager handles session operations
 type SessionManager struct {
-	config   SessionConfig
-	sessions map[string]*SessionData
-	mutex    sync.RWMutex
+	config         SessionConfig
+	storage        Storage
+	ticker         *time.Ticker
+	stopCh         chan struct{}
+	cleanupEnabled bool
 }
 
-// NewSessionManager creates a new session manager with the given configuration
+// NewSessionManager creates a new session manager with the given configuration using memory storage
 func NewSessionManager(config SessionConfig) *SessionManager {
+	return NewSessionManagerWithStorage(config, NewMemoryStorage())
+}
+
+// NewSessionManagerWithStorage creates a new session manager with custom storage backend
+func NewSessionManagerWithStorage(config SessionConfig, storage Storage) *SessionManager {
 	sm := &SessionManager{
-		config:   config,
-		sessions: make(map[string]*SessionData),
+		config:         config,
+		storage:        storage,
+		stopCh:         make(chan struct{}),
+		cleanupEnabled: false,
 	}
 
 	// Start cleanup goroutine if cleanup interval is set
 	if config.CleanupInterval > 0 {
-		go sm.startCleanupRoutine()
+		sm.enableAutoCleanup(config.CleanupInterval)
 	}
 
 	return sm
+}
+
+// enableAutoCleanup starts automatic cleanup of expired sessions
+func (sm *SessionManager) enableAutoCleanup(interval time.Duration) {
+	if sm.cleanupEnabled {
+		return
+	}
+
+	sm.cleanupEnabled = true
+	sm.ticker = time.NewTicker(interval)
+
+	go func() {
+		for {
+			select {
+			case <-sm.ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_, _ = sm.storage.CleanupExpired(ctx)
+				cancel()
+			case <-sm.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// DisableAutoCleanup stops automatic cleanup
+func (sm *SessionManager) DisableAutoCleanup() {
+	if !sm.cleanupEnabled {
+		return
+	}
+
+	sm.cleanupEnabled = false
+	if sm.ticker != nil {
+		sm.ticker.Stop()
+	}
+	close(sm.stopCh)
+	sm.stopCh = make(chan struct{})
+}
+
+// Close closes the session manager and cleans up resources
+func (sm *SessionManager) Close() error {
+	// Stop auto cleanup if enabled
+	sm.DisableAutoCleanup()
+
+	// Close storage
+	if sm.storage != nil {
+		return sm.storage.Close()
+	}
+
+	return nil
 }
 
 // GenerateSessionID generates a cryptographically secure session ID
@@ -77,17 +143,18 @@ func GenerateSessionID() (string, error) {
 }
 
 // CreateSession creates a new session for the user
-func (sm *SessionManager) CreateSession(userID int64, role, email, refreshToken, ipAddress, userAgent string) (string, *SessionData, error) {
+func (sm *SessionManager) CreateSession(userID int64, role, email, accessToken, refreshToken, ipAddress, userAgent string) (string, *SessionData, error) {
 	sessionID, err := GenerateSessionID()
 	if err != nil {
 		return "", nil, err
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	sessionData := &SessionData{
 		UserID:       userID,
 		Role:         role,
 		Email:        email,
+		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(sm.config.MaxAge),
@@ -97,9 +164,13 @@ func (sm *SessionManager) CreateSession(userID int64, role, email, refreshToken,
 		Metadata:     make(map[string]interface{}),
 	}
 
-	sm.mutex.Lock()
-	sm.sessions[sessionID] = sessionData
-	sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = sm.storage.SetSession(ctx, sessionID, sessionData)
+	if err != nil {
+		return "", nil, err
+	}
 
 	return sessionID, sessionData, nil
 }
@@ -110,35 +181,64 @@ func (sm *SessionManager) GetSession(sessionID string) (*SessionData, error) {
 		return nil, ErrInvalidSessionID
 	}
 
-	sm.mutex.RLock()
-	sessionData, exists := sm.sessions[sessionID]
-	sm.mutex.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if !exists {
-		return nil, ErrSessionNotFound
-	}
-
-	// Check if session has expired
-	if time.Now().After(sessionData.ExpiresAt) {
-		sm.DeleteSession(sessionID)
-		return nil, ErrSessionExpired
+	sessionData, err := sm.storage.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Update last used time
-	sm.mutex.Lock()
-	sessionData.LastUsedAt = time.Now()
-	sm.mutex.Unlock()
+	sessionData.LastUsedAt = time.Now().UTC()
+	err = sm.storage.SetSession(ctx, sessionID, sessionData)
+	if err != nil {
+		// Log error but don't fail the request
+		// In production, you might want to handle this differently
+	}
 
-	// Return a copy to prevent external modification
-	sessionCopy := *sessionData
-	if sessionData.Metadata != nil {
-		sessionCopy.Metadata = make(map[string]interface{})
-		for k, v := range sessionData.Metadata {
-			sessionCopy.Metadata[k] = v
+	// Storage already returns a copy
+	return sessionData, nil
+}
+
+// GetSessionWithValidation retrieves a session by ID and validates IP/UserAgent if configured
+func (sm *SessionManager) GetSessionWithValidation(sessionID, clientIP, userAgent string) (*SessionData, error) {
+	sessionData, err := sm.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate IP binding if enabled
+	if sm.config.StrictIPBinding && sessionData.IPAddress != "" && sessionData.IPAddress != clientIP {
+		if !sm.config.AllowIPChange {
+			return nil, errors.New("session IP mismatch - authentication required")
+		}
+
+		// Check if IP changes are within allowed limit
+		if sessionData.IPChanges >= sm.config.MaxIPChanges {
+			return nil, errors.New("too many IP changes - authentication required")
+		}
+
+		// Update IP and increment change counter
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		sessionData.IPAddress = clientIP
+		sessionData.IPChanges++
+		sessionData.LastIPChange = time.Now().UTC()
+
+		err = sm.storage.SetSession(ctx, sessionID, sessionData)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	return &sessionCopy, nil
+	// Validate UserAgent binding if enabled
+	if sm.config.StrictUABinding && sessionData.UserAgent != "" && sessionData.UserAgent != userAgent {
+		return nil, errors.New("session user agent mismatch - authentication required")
+	}
+
+	return sessionData, nil
 }
 
 // UpdateSession updates session data
@@ -147,21 +247,18 @@ func (sm *SessionManager) UpdateSession(sessionID string, updates map[string]int
 		return ErrInvalidSessionID
 	}
 
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	sessionData, exists := sm.sessions[sessionID]
-	if !exists {
-		return ErrSessionNotFound
-	}
-
-	// Check if session has expired
-	if time.Now().After(sessionData.ExpiresAt) {
-		delete(sm.sessions, sessionID)
-		return ErrSessionExpired
+	sessionData, err := sm.storage.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
 	}
 
 	// Update allowed fields
+	if accessToken, ok := updates["access_token"].(string); ok {
+		sessionData.AccessToken = accessToken
+	}
 	if refreshToken, ok := updates["refresh_token"].(string); ok {
 		sessionData.RefreshToken = refreshToken
 	}
@@ -182,8 +279,10 @@ func (sm *SessionManager) UpdateSession(sessionID string, updates map[string]int
 		}
 	}
 
-	sessionData.LastUsedAt = time.Now()
-	return nil
+	// Update last used time
+	sessionData.LastUsedAt = time.Now().UTC()
+
+	return sm.storage.SetSession(ctx, sessionID, sessionData)
 }
 
 // DeleteSession removes a session
@@ -192,27 +291,22 @@ func (sm *SessionManager) DeleteSession(sessionID string) bool {
 		return false
 	}
 
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if _, exists := sm.sessions[sessionID]; exists {
-		delete(sm.sessions, sessionID)
-		return true
-	}
-	return false
+	err := sm.storage.DeleteSession(ctx, sessionID)
+	// Return true only if session was actually deleted (not if it didn't exist)
+	return err == nil
 }
 
 // DeleteUserSessions removes all sessions for a specific user
 func (sm *SessionManager) DeleteUserSessions(userID int64) int {
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	deleted := 0
-	for sessionID, sessionData := range sm.sessions {
-		if sessionData.UserID == userID {
-			delete(sm.sessions, sessionID)
-			deleted++
-		}
+	deleted, err := sm.storage.DeleteUserSessions(ctx, userID)
+	if err != nil {
+		return 0
 	}
 	return deleted
 }
@@ -223,23 +317,18 @@ func (sm *SessionManager) ExtendSession(sessionID string, duration time.Duration
 		return ErrInvalidSessionID
 	}
 
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	sessionData, exists := sm.sessions[sessionID]
-	if !exists {
-		return ErrSessionNotFound
-	}
-
-	// Check if session has expired
-	if time.Now().After(sessionData.ExpiresAt) {
-		delete(sm.sessions, sessionID)
-		return ErrSessionExpired
+	sessionData, err := sm.storage.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
 	}
 
 	sessionData.ExpiresAt = sessionData.ExpiresAt.Add(duration)
-	sessionData.LastUsedAt = time.Now()
-	return nil
+	sessionData.LastUsedAt = time.Now().UTC()
+
+	return sm.storage.SetSession(ctx, sessionID, sessionData)
 }
 
 // SetSessionCookie sets the session cookie in the HTTP response
@@ -285,43 +374,47 @@ func (sm *SessionManager) GetSessionFromRequest(r *http.Request) (string, error)
 }
 
 // GetUserSessions returns all active sessions for a user
+// Note: This is a simplified implementation for memory storage
+// For distributed storage, you would need to implement a more efficient query mechanism
 func (sm *SessionManager) GetUserSessions(userID int64) []*SessionData {
-	sm.mutex.RLock()
-	defer sm.mutex.RUnlock()
+	// For memory storage, we can access the underlying storage
+	if memStorage, ok := sm.storage.(*MemoryStorage); ok {
+		memStorage.mutex.RLock()
+		defer memStorage.mutex.RUnlock()
 
-	var userSessions []*SessionData
-	now := time.Now()
+		var userSessions []*SessionData
+		now := time.Now().UTC()
 
-	for _, sessionData := range sm.sessions {
-		if sessionData.UserID == userID && now.Before(sessionData.ExpiresAt) {
-			// Return a copy to prevent external modification
-			sessionCopy := *sessionData
-			if sessionData.Metadata != nil {
-				sessionCopy.Metadata = make(map[string]interface{})
-				for k, v := range sessionData.Metadata {
-					sessionCopy.Metadata[k] = v
+		for _, sessionData := range memStorage.sessions {
+			if sessionData.UserID == userID && now.Before(sessionData.ExpiresAt) {
+				// Return a copy to prevent external modification
+				sessionCopy := *sessionData
+				if sessionData.Metadata != nil {
+					sessionCopy.Metadata = make(map[string]interface{})
+					for k, v := range sessionData.Metadata {
+						sessionCopy.Metadata[k] = v
+					}
 				}
+				userSessions = append(userSessions, &sessionCopy)
 			}
-			userSessions = append(userSessions, &sessionCopy)
 		}
+
+		return userSessions
 	}
 
-	return userSessions
+	// For other storage types, this would need to be implemented differently
+	// For now, return empty slice
+	return []*SessionData{}
 }
 
 // CleanupExpiredSessions removes expired sessions
 func (sm *SessionManager) CleanupExpiredSessions() int {
-	sm.mutex.Lock()
-	defer sm.mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	now := time.Now()
-	cleaned := 0
-
-	for sessionID, sessionData := range sm.sessions {
-		if now.After(sessionData.ExpiresAt) {
-			delete(sm.sessions, sessionID)
-			cleaned++
-		}
+	cleaned, err := sm.storage.CleanupExpired(ctx)
+	if err != nil {
+		return 0
 	}
 
 	return cleaned
@@ -329,44 +422,32 @@ func (sm *SessionManager) CleanupExpiredSessions() int {
 
 // GetStats returns statistics about the session manager
 func (sm *SessionManager) GetStats() map[string]interface{} {
-	sm.mutex.RLock()
-	defer sm.mutex.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	now := time.Now()
-	activeSessions := 0
-	expiredSessions := 0
-	userCounts := make(map[int64]int)
-
-	for _, sessionData := range sm.sessions {
-		if now.Before(sessionData.ExpiresAt) {
-			activeSessions++
-			userCounts[sessionData.UserID]++
-		} else {
-			expiredSessions++
+	storageStats, err := sm.storage.GetStats(ctx)
+	if err != nil {
+		// Return basic config stats on error
+		return map[string]interface{}{
+			"cookie_name":     sm.config.CookieName,
+			"max_age":         sm.config.MaxAge.String(),
+			"secure":          sm.config.Secure,
+			"http_only":       sm.config.HttpOnly,
+			"same_site":       int(sm.config.SameSite),
+			"cleanup_enabled": sm.cleanupEnabled,
+			"error":           err.Error(),
 		}
 	}
 
-	return map[string]interface{}{
-		"total_sessions":   len(sm.sessions),
-		"active_sessions":  activeSessions,
-		"expired_sessions": expiredSessions,
-		"unique_users":     len(userCounts),
-		"cookie_name":      sm.config.CookieName,
-		"max_age":          sm.config.MaxAge.String(),
-		"secure":           sm.config.Secure,
-		"http_only":        sm.config.HttpOnly,
-		"same_site":        int(sm.config.SameSite),
-	}
-}
+	// Add configuration to storage stats
+	storageStats["cookie_name"] = sm.config.CookieName
+	storageStats["max_age"] = sm.config.MaxAge.String()
+	storageStats["secure"] = sm.config.Secure
+	storageStats["http_only"] = sm.config.HttpOnly
+	storageStats["same_site"] = int(sm.config.SameSite)
+	storageStats["cleanup_enabled"] = sm.cleanupEnabled
 
-// startCleanupRoutine starts a background routine to clean up expired sessions
-func (sm *SessionManager) startCleanupRoutine() {
-	ticker := time.NewTicker(sm.config.CleanupInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		sm.CleanupExpiredSessions()
-	}
+	return storageStats
 }
 
 // Predefined session configurations
@@ -380,6 +461,10 @@ var (
 		HttpOnly:        true,
 		SameSite:        http.SameSiteLaxMode,
 		CleanupInterval: time.Hour, // Cleanup every hour
+		StrictIPBinding: false,     // Disabled by default for better UX
+		StrictUABinding: false,     // Disabled by default for better UX
+		AllowIPChange:   true,      // Allow IP changes for mobile users
+		MaxIPChanges:    5,         // Allow up to 5 IP changes per session
 	}
 
 	// DevelopmentSessionConfig provides a configuration suitable for development
@@ -391,6 +476,10 @@ var (
 		HttpOnly:        true,
 		SameSite:        http.SameSiteLaxMode,
 		CleanupInterval: 30 * time.Minute, // Cleanup every 30 minutes
+		StrictIPBinding: false,            // Disabled for development
+		StrictUABinding: false,            // Disabled for development
+		AllowIPChange:   true,             // Allow IP changes
+		MaxIPChanges:    10,               // More lenient for development
 	}
 
 	// ProductionSessionConfig provides a secure configuration for production
@@ -402,5 +491,9 @@ var (
 		HttpOnly:        true,
 		SameSite:        http.SameSiteLaxMode,
 		CleanupInterval: 2 * time.Hour, // Cleanup every 2 hours
+		StrictIPBinding: true,          // Enable for production security
+		StrictUABinding: false,         // Keep disabled for better UX
+		AllowIPChange:   true,          // Allow but limit IP changes
+		MaxIPChanges:    3,             // Stricter limit for production
 	}
 )

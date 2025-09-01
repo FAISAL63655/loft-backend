@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 )
 
@@ -45,6 +46,7 @@ type VerificationCode struct {
 type VerificationManager struct {
 	codes         map[string]*VerificationCode // In production, use Redis or database
 	resendTracker map[string][]time.Time       // Track resend attempts per email
+	mutex         sync.RWMutex                 // Protects concurrent access to maps
 }
 
 // NewVerificationManager creates a new verification manager
@@ -70,7 +72,7 @@ func GenerateVerificationCode() (string, error) {
 
 // CreateVerificationCode creates a new verification code for the user
 func (vm *VerificationManager) CreateVerificationCode(userID int64, email string) (*VerificationCode, error) {
-	// Check resend limits
+	// Check resend limits (needs read lock)
 	if err := vm.checkResendLimits(email); err != nil {
 		return nil, err
 	}
@@ -86,22 +88,25 @@ func (vm *VerificationManager) CreateVerificationCode(userID int64, email string
 		Code:      code,
 		Email:     email,
 		UserID:    userID,
-		ExpiresAt: time.Now().Add(VerificationCodeExpiry),
-		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().UTC().Add(VerificationCodeExpiry),
+		CreatedAt: time.Now().UTC(),
 		Attempts:  0,
 	}
 
-	// Store the code (in production, store in database/Redis)
+	// Store the code and track resend attempt (needs write lock)
+	vm.mutex.Lock()
 	vm.codes[email] = verificationCode
-
-	// Track resend attempt
-	vm.trackResendAttempt(email)
+	vm.trackResendAttemptLocked(email)
+	vm.mutex.Unlock()
 
 	return verificationCode, nil
 }
 
 // VerifyCode verifies the provided code for the email
 func (vm *VerificationManager) VerifyCode(email, code string) (*VerificationCode, error) {
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+
 	// Get stored code
 	storedCode, exists := vm.codes[email]
 	if !exists {
@@ -114,7 +119,7 @@ func (vm *VerificationManager) VerifyCode(email, code string) (*VerificationCode
 	}
 
 	// Check if code has expired
-	if time.Now().After(storedCode.ExpiresAt) {
+	if time.Now().UTC().After(storedCode.ExpiresAt) {
 		return nil, ErrCodeExpired
 	}
 
@@ -140,6 +145,9 @@ func (vm *VerificationManager) VerifyCode(email, code string) (*VerificationCode
 
 // IsCodeValid checks if a code exists and is still valid (not expired or used)
 func (vm *VerificationManager) IsCodeValid(email string) bool {
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
 	storedCode, exists := vm.codes[email]
 	if !exists {
 		return false
@@ -151,7 +159,7 @@ func (vm *VerificationManager) IsCodeValid(email string) bool {
 	}
 
 	// Check if expired
-	if time.Now().After(storedCode.ExpiresAt) {
+	if time.Now().UTC().After(storedCode.ExpiresAt) {
 		return false
 	}
 
@@ -160,6 +168,9 @@ func (vm *VerificationManager) IsCodeValid(email string) bool {
 
 // GetCodeInfo returns information about the verification code for an email
 func (vm *VerificationManager) GetCodeInfo(email string) (*VerificationCode, bool) {
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
 	code, exists := vm.codes[email]
 	if !exists {
 		return nil, false
@@ -172,7 +183,10 @@ func (vm *VerificationManager) GetCodeInfo(email string) (*VerificationCode, boo
 
 // CleanupExpiredCodes removes expired verification codes
 func (vm *VerificationManager) CleanupExpiredCodes() int {
-	now := time.Now()
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+
+	now := time.Now().UTC()
 	cleaned := 0
 
 	for email, code := range vm.codes {
@@ -203,7 +217,10 @@ func (vm *VerificationManager) CleanupExpiredCodes() int {
 
 // checkResendLimits checks if the user can request another verification code
 func (vm *VerificationManager) checkResendLimits(email string) error {
-	now := time.Now()
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
+	now := time.Now().UTC()
 	attempts, exists := vm.resendTracker[email]
 
 	if !exists {
@@ -236,7 +253,14 @@ func (vm *VerificationManager) checkResendLimits(email string) error {
 
 // trackResendAttempt records a resend attempt for rate limiting
 func (vm *VerificationManager) trackResendAttempt(email string) {
-	now := time.Now()
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+	vm.trackResendAttemptLocked(email)
+}
+
+// trackResendAttemptLocked records a resend attempt (assumes lock is held)
+func (vm *VerificationManager) trackResendAttemptLocked(email string) {
+	now := time.Now().UTC()
 
 	if attempts, exists := vm.resendTracker[email]; exists {
 		vm.resendTracker[email] = append(attempts, now)
@@ -247,12 +271,15 @@ func (vm *VerificationManager) trackResendAttempt(email string) {
 
 // GetResendCooldownRemaining returns the remaining cooldown time before next resend
 func (vm *VerificationManager) GetResendCooldownRemaining(email string) time.Duration {
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
 	attempts, exists := vm.resendTracker[email]
 	if !exists || len(attempts) == 0 {
 		return 0
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	lastAttempt := attempts[len(attempts)-1]
 	elapsed := now.Sub(lastAttempt)
 
@@ -265,7 +292,10 @@ func (vm *VerificationManager) GetResendCooldownRemaining(email string) time.Dur
 
 // GetRemainingResendAttempts returns the number of remaining resend attempts for the hour
 func (vm *VerificationManager) GetRemainingResendAttempts(email string) int {
-	now := time.Now()
+	vm.mutex.RLock()
+	defer vm.mutex.RUnlock()
+
+	now := time.Now().UTC()
 	attempts, exists := vm.resendTracker[email]
 
 	if !exists {
@@ -289,6 +319,9 @@ func (vm *VerificationManager) GetRemainingResendAttempts(email string) int {
 
 // InvalidateCode invalidates a verification code (useful for cleanup or security)
 func (vm *VerificationManager) InvalidateCode(email string) bool {
+	vm.mutex.Lock()
+	defer vm.mutex.Unlock()
+
 	if _, exists := vm.codes[email]; exists {
 		delete(vm.codes, email)
 		return true

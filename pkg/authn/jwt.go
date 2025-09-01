@@ -63,7 +63,7 @@ func NewJWTManager(accessSecret, refreshSecret string) *JWTManager {
 
 // GenerateTokens creates a new access and refresh token pair for the user
 func (j *JWTManager) GenerateTokens(userID int64, role, email string) (*TokenPair, error) {
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Generate access token
 	accessClaims := &CustomClaims{
@@ -202,7 +202,7 @@ func IsTokenExpired(tokenString string) bool {
 	if err != nil {
 		return true
 	}
-	return time.Now().After(exp)
+	return time.Now().UTC().After(exp)
 }
 
 // GetTokenExpirationTime returns the expiration time by decoding payload without verifying signature

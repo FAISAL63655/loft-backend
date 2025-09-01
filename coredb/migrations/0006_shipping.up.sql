@@ -64,7 +64,7 @@ DECLARE
 BEGIN
     -- إنشاء بيانات الحدث
     event_data := jsonb_build_object(
-        'at', NOW()::TEXT,
+        'at', to_char(NOW() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
         'status', new_status::TEXT,
         'note', note
     );
@@ -72,33 +72,35 @@ BEGIN
     -- إضافة الحدث إلى قائمة الأحداث
     UPDATE shipments
     SET events = events || jsonb_build_array(event_data), -- ضمان إضافة كعنصر ضمن مصفوفة
-        status = new_status,
-        updated_at = NOW()
+        status = new_status
     WHERE id = shipment_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- دالة لتحديث حالة الشحنة مع إضافة حدث تلقائي
-CREATE OR REPLACE FUNCTION update_shipment_status()
+-- قيد: منع إنشاء/تحديث شحنات لطلبات غير مدفوعة
+CREATE OR REPLACE FUNCTION enforce_shipment_paid()
 RETURNS TRIGGER AS $$
+DECLARE
+    ord_status TEXT;
 BEGIN
-    -- إذا تغيرت الحالة، أضف حدث تلقائي
-    IF OLD.status != NEW.status THEN
-        NEW.events := OLD.events || jsonb_build_array(jsonb_build_object(
-            'at', NOW()::TEXT,
-            'status', NEW.status::TEXT,
-            'note', 'Status updated automatically'
-        ));
+    SELECT status::text INTO ord_status FROM orders WHERE id = NEW.order_id;
+    IF ord_status IS NULL THEN
+        RAISE EXCEPTION 'Order not found for shipment';
     END IF;
-    
+    IF ord_status <> 'paid' THEN
+        RAISE EXCEPTION 'SHP_ORDER_NOT_PAID';
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
--- إضافة trigger لتحديث حالة الشحنة
-CREATE TRIGGER update_shipment_status_trigger
+CREATE TRIGGER enforce_shipment_paid_ins
+    BEFORE INSERT ON shipments
+    FOR EACH ROW EXECUTE FUNCTION enforce_shipment_paid();
+
+CREATE TRIGGER enforce_shipment_paid_upd
     BEFORE UPDATE ON shipments
-    FOR EACH ROW EXECUTE FUNCTION update_shipment_status();
+    FOR EACH ROW EXECUTE FUNCTION enforce_shipment_paid();
 
 -- إدراج شركات الشحن الأولية
 INSERT INTO shipping_companies (name, enabled) VALUES

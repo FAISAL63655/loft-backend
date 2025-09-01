@@ -161,7 +161,7 @@ DECLARE
     user_city_id BIGINT;
     free_threshold NUMERIC(12,2);
 BEGIN
-    -- حساب المجموع الفرعي
+    -- حساب المجموع الفرعي (قيمة إجمالية للعناصر)
     SELECT COALESCE(SUM(line_total_gross), 0) INTO subtotal
     FROM order_items 
     WHERE order_id = NEW.id;
@@ -182,8 +182,8 @@ BEGIN
     SELECT city_id INTO user_city_id
     FROM users WHERE id = NEW.user_id;
     
-    SELECT shipping_fee_net INTO shipping_fee_net
-    FROM cities WHERE id = user_city_id;
+    SELECT c.shipping_fee_net INTO shipping_fee_net
+    FROM cities c WHERE c.id = user_city_id;
     
     -- حساب رسم الشحن الإجمالي
     shipping_fee_gross := ROUND(shipping_fee_net * (1 + vat_rate), 2);
@@ -199,8 +199,13 @@ BEGIN
     END IF;
     
     -- تحديث إجماليات الطلب
+    -- VAT per-line: اجمع لكل بند VAT بعد التقريب (line_total_gross يحتوي السعر الإجمالي بما فيه الضريبة)،
+    -- نستخرج مكوّن الضريبة لكل بند ونجمعه ثم نضيف ضريبة الشحن المحتسبة أعلاه.
     NEW.subtotal_gross := subtotal;
-    NEW.vat_amount := ROUND(subtotal * vat_rate / (1 + vat_rate), 2) + shipping_vat;
+    NEW.vat_amount := (
+        SELECT COALESCE(SUM(ROUND(oi.line_total_gross * vat_rate / (1 + vat_rate), 2)), 0)
+        FROM order_items oi WHERE oi.order_id = NEW.id
+    ) + shipping_vat;
     NEW.shipping_fee_gross := shipping_fee_gross;
     NEW.grand_total := subtotal + shipping_fee_gross;
     

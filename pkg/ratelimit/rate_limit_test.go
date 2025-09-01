@@ -1,4 +1,4 @@
-package rate_limit
+package ratelimit
 
 import (
 	"fmt"
@@ -385,7 +385,7 @@ func TestCleanupExpiredRecords(t *testing.T) {
 
 	// Cleanup should work without error
 	_ = rl.CleanupExpiredRecords()
-	
+
 	// Verify cleanup worked by checking stats
 	stats := rl.GetStats()
 	if totalRecords, ok := stats["total_records"].(int); ok && totalRecords > 2 {

@@ -5,15 +5,18 @@ import "time"
 
 // RegisterRequest represents the user registration request
 type RegisterRequest struct {
+	Name     string `json:"name" validate:"required"`
 	Email    string `json:"email" validate:"required,email"`
+	Phone    string `json:"phone" validate:"required"` // إجباري
+	CityID   int64  `json:"city_id" validate:"required,min=1"`
 	Password string `json:"password" validate:"required,min=8"`
-	Name     string `json:"name,omitempty"`
 }
 
 // RegisterResponse represents the user registration response
 type RegisterResponse struct {
-	Message string `json:"message"`
-	UserID  int64  `json:"user_id"`
+	User                      UserInfo `json:"user"`
+	RequiresEmailVerification bool     `json:"requires_email_verification"`
+	Message                   string   `json:"message,omitempty"`
 }
 
 // LoginRequest represents the user login request
@@ -33,10 +36,12 @@ type LoginResponse struct {
 
 // UserInfo represents user information
 type UserInfo struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Role  string `json:"role"`
-	Name  string `json:"name,omitempty"`
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
+	Phone  string `json:"phone"`
+	CityID int64  `json:"city_id"`
+	Role   string `json:"role"`
 }
 
 // VerifyEmailRequest represents the email verification request
@@ -83,10 +88,13 @@ type ResendVerificationResponse struct {
 
 // User represents a user entity from the database
 type User struct {
-	ID           int64
-	Email        string
-	PasswordHash string
-	Role         string
-	State        string
-	Name         string
+	ID              int64
+	Name            string
+	Email           string
+	Phone           string
+	CityID          int64
+	PasswordHash    string
+	Role            string
+	State           string
+	EmailVerifiedAt *time.Time
 }

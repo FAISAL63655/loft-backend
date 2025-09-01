@@ -10,7 +10,6 @@ import (
 	"encore.app/pkg/authn"
 	"encore.app/pkg/session"
 	"encore.dev/beta/auth"
-	"encore.dev/beta/errs"
 )
 
 // Context keys for type safety
@@ -51,7 +50,7 @@ func AuthMiddleware(config AuthConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Extract token from Authorization header or session cookie
-			token, sessionID, isFromSession, err := extractAuthInfo(r, config.SessionManager)
+			token, sessionID, _, err := extractAuthInfo(r, config.SessionManager)
 
 			if err != nil {
 				if config.Optional {
@@ -63,15 +62,8 @@ func AuthMiddleware(config AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Validate JWT token based on source
-			var claims *authn.CustomClaims
-			if isFromSession {
-				// Token from session is a refresh token
-				claims, err = config.JWTManager.ValidateRefreshToken(token)
-			} else {
-				// Token from Authorization header is an access token
-				claims, err = config.JWTManager.ValidateAccessToken(token)
-			}
+			// Validate JWT access token (secure)
+			claims, err := config.JWTManager.ValidateAccessToken(token)
 
 			if err != nil {
 				// For optional auth, only allow missing tokens, not invalid ones
@@ -176,7 +168,11 @@ func extractAuthInfo(r *http.Request, sessionManager *session.SessionManager) (t
 			return "", "", false, ErrSessionRequired
 		}
 
-		return sessionData.RefreshToken, sessionID, true, nil
+		// Use AccessToken from session for authentication (secure)
+		if sessionData.AccessToken == "" {
+			return "", "", false, ErrSessionRequired
+		}
+		return sessionData.AccessToken, sessionID, true, nil // true = isFromSession
 	}
 
 	return "", "", false, ErrMissingToken
@@ -235,10 +231,7 @@ func IsVerified(ctx context.Context) bool {
 func AuthHandler(ctx context.Context, token string) (auth.UID, *UserContext, error) {
 	// This would be configured with your JWT manager instance
 	// For now, we'll return an error indicating it needs to be configured
-	return "", nil, &errs.Error{
-		Code:    errs.Unauthenticated,
-		Message: "auth handler not configured",
-	}
+	return "", nil, errors.New("auth handler not configured")
 }
 
 // CreateEncoreAuthHandler creates an Encore auth handler with the provided JWT manager
@@ -248,20 +241,11 @@ func CreateEncoreAuthHandler(jwtManager *authn.JWTManager) func(context.Context,
 		if err != nil {
 			switch {
 			case errors.Is(err, authn.ErrExpiredToken):
-				return "", nil, &errs.Error{
-					Code:    errs.Unauthenticated,
-					Message: "token expired",
-				}
+				return "", nil, errors.New("token expired")
 			case errors.Is(err, authn.ErrInvalidSignature):
-				return "", nil, &errs.Error{
-					Code:    errs.Unauthenticated,
-					Message: "invalid token signature",
-				}
+				return "", nil, errors.New("invalid token signature")
 			default:
-				return "", nil, &errs.Error{
-					Code:    errs.Unauthenticated,
-					Message: "invalid token",
-				}
+				return "", nil, errors.New("invalid token")
 			}
 		}
 

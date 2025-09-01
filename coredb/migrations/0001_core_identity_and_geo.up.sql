@@ -32,6 +32,7 @@ CREATE TABLE users (
     role user_role NOT NULL DEFAULT 'registered',
     state user_state NOT NULL DEFAULT 'active',
     email_verified_at TIMESTAMPTZ NULL,
+    last_login_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -59,6 +60,23 @@ CREATE TABLE verification_requests (
 CREATE INDEX idx_verification_requests_user_id ON verification_requests(user_id);
 CREATE INDEX idx_verification_requests_status ON verification_requests(status);
 CREATE INDEX idx_verification_requests_reviewed_by ON verification_requests(reviewed_by);
+
+-- جدول رموز التحقق بالبريد الإلكتروني
+CREATE TABLE email_verification_codes (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    code TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- فهارس لرموز التحقق بالبريد
+CREATE INDEX idx_email_verification_codes_user_id ON email_verification_codes(user_id);
+CREATE INDEX idx_email_verification_codes_email ON email_verification_codes(email);
+CREATE INDEX idx_email_verification_codes_code ON email_verification_codes(code);
+CREATE INDEX idx_email_verification_codes_expires_at ON email_verification_codes(expires_at);
 
 -- جدول العناوين
 CREATE TABLE addresses (
@@ -120,7 +138,11 @@ CREATE TRIGGER normalize_email_lower_trg
 ALTER TABLE users
     ADD CONSTRAINT chk_email_lower CHECK (email = lower(email));
 
--- إزالة القيد المكرر على البريد الإلكتروني الخام (نبقي فقط فهرس LOWER(email))
+-- إضافة قيد فريد صارم على البريد الإلكتروني لمنع التكرار
+ALTER TABLE users
+    ADD CONSTRAINT users_email_unique UNIQUE (email);
+
+-- إزالة القيد المكرر على البريد الإلكتروني الخام (إن وجد)
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
 
 CREATE TRIGGER update_verification_requests_updated_at 
@@ -182,9 +204,10 @@ INSERT INTO cities (name_ar, name_en, shipping_fee_net, enabled) VALUES
 ('أبها', 'Abha', 45.00, true),
 ('عرعر', 'Arar', 50.00, true);
 
--- إنشاء مستخدم إداري أولي (كلمة المرور: admin123 - يجب تغييرها)
--- hash للكلمة admin123 باستخدام Argon2id
-INSERT INTO users (name, email, password_hash, role, state, email_verified_at, city_id) VALUES
-('مدير النظام', 'admin@loft-dughairi.com', '$argon2id$v=19$m=65536,t=3,p=2$placeholder_salt$placeholder_hash', 'admin', 'active', NOW(), 1);
+-- إنشاء مستخدم إداري أولي (كلمة المرور: password)
+-- ملاحظة: تم استخدام bcrypt للهش لتسريع الإدخال (مدعوم أيضاً)
+INSERT INTO users (name, email, password_hash, role, state, email_verified_at, city_id)
+VALUES ('مدير النظام', 'admin@loft-dughairi.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin', 'active', NOW(), 1);
 
--- تعليق: كلمة المرور المؤقتة هي admin123 ويجب تغييرها فور أول تسجيل دخول
+-- تعليق: كلمة المرور المؤقتة هي password ويجب تغييرها فور أول تسجيل دخول
+

@@ -490,7 +490,7 @@ func TestAuthMiddleware_SessionBasedAuth(t *testing.T) {
 	}
 
 	// Create a session with the refresh token
-	sessionID, sessionData, err := sessionManager.CreateSession(userID, role, email, tokenPair.RefreshToken, "127.0.0.1", "test-agent")
+	sessionID, sessionData, err := sessionManager.CreateSession(userID, role, email, tokenPair.AccessToken, tokenPair.RefreshToken, "127.0.0.1", "test-agent")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}

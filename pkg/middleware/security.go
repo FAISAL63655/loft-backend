@@ -3,11 +3,16 @@ package middleware
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
+
+	"encore.app/pkg/httpx"
+	"encore.app/pkg/logger"
+	"encore.app/pkg/metrics"
 )
 
 // SecurityConfig defines the configuration for security middleware
@@ -45,6 +50,44 @@ var DefaultSecurityConfig = SecurityConfig{
 	EnableXSSProtection:      false, // Disabled as it's deprecated and can cause issues
 	ContentSecurityPolicy:    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';",
 	ReferrerPolicy:           "strict-origin-when-cross-origin",
+}
+
+// DevelopmentSecurityConfig provides relaxed security for development
+var DevelopmentSecurityConfig = SecurityConfig{
+	CSRFTokenName:            "csrf_token",
+	CSRFCookieName:           "csrf_cookie",
+	CSRFExemptPaths:          []string{"/health", "/metrics", "/api"},
+	EnableHSTS:               false, // No HTTPS in dev usually
+	HSTSMaxAge:               0,
+	EnableContentTypeNoSniff: true,
+	EnableFrameOptions:       true,
+	FrameOptionsValue:        "SAMEORIGIN", // More permissive for dev tools
+	EnableXSSProtection:      false,
+	ContentSecurityPolicy:    "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';", // Relaxed for dev
+	ReferrerPolicy:           "no-referrer-when-downgrade",
+}
+
+// ProductionSecurityConfig provides strict security for production
+var ProductionSecurityConfig = SecurityConfig{
+
+	CSRFTokenName:            "csrf_token",
+	CSRFCookieName:           "csrf_cookie",
+	CSRFExemptPaths:          []string{"/health", "/metrics"}, // Minimal exemptions
+	EnableHSTS:               true,
+	HSTSMaxAge:               31536000, // 1 year
+	EnableContentTypeNoSniff: true,
+	EnableFrameOptions:       true,
+	FrameOptionsValue:        "DENY", // Strict frame protection
+	EnableXSSProtection:      false,  // Still deprecated
+	// Strict CSP including Moyasar & Apple Pay domains per PRD
+	ContentSecurityPolicy: "default-src 'self'; " +
+		"script-src 'self'; " +
+		"style-src 'self'; " +
+		"img-src 'self' data: https:; " +
+		"font-src 'self'; " +
+		"connect-src 'self' https://api.moyasar.com https://*.moyasar.com https://apple-pay-gateway.apple.com wss:; " +
+		"frame-ancestors 'none'; base-uri 'self'; object-src 'none';",
+	ReferrerPolicy: "strict-origin-when-cross-origin",
 }
 
 // SecurityHeadersMiddleware adds security headers to responses
@@ -95,6 +138,9 @@ func SecurityHeadersMiddleware(config SecurityConfig) func(http.Handler) http.Ha
 	}
 }
 
+// CORSSettingsProvider defines interface for dynamic CORS settings
+type CORSSettingsProvider func() *CORSConfig
+
 // CORSConfig defines CORS configuration
 type CORSConfig struct {
 	AllowedOrigins     []string
@@ -104,23 +150,65 @@ type CORSConfig struct {
 	AllowCredentials   bool
 	MaxAge             int
 	OptionsPassthrough bool
+	UseSystemSettings  bool                 // Enable dynamic loading from system_settings
+	SettingsProvider   CORSSettingsProvider // Callback for dynamic settings (avoids import cycle)
+}
+
+// GetDynamicSettings gets CORS settings from provider or fallback to static
+func (c *CORSConfig) GetDynamicSettings() *CORSConfig {
+	if !c.UseSystemSettings {
+		return c
+	}
+
+	// Try to get settings from provider (avoids import cycle)
+	if c.SettingsProvider != nil {
+		if dynamicConfig := c.SettingsProvider(); dynamicConfig != nil {
+			return dynamicConfig
+		}
+	}
+
+	// Fallback to static config
+	return c
 }
 
 // DefaultCORSConfig provides a default CORS configuration
 var DefaultCORSConfig = CORSConfig{
-	AllowedOrigins:   []string{"*"},
-	AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-	AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-	ExposedHeaders:   []string{"Link"},
-	AllowCredentials: false,
-	MaxAge:           300,
+	AllowedOrigins:    []string{"*"},
+	AllowedMethods:    []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+	AllowedHeaders:    []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+	ExposedHeaders:    []string{"Link"},
+	AllowCredentials:  false,
+	MaxAge:            300,
+	UseSystemSettings: false,
 }
 
-// CORSMiddleware handles Cross-Origin Resource Sharing
+// NewDynamicCORSConfig creates CORS configuration with system_settings integration
+func NewDynamicCORSConfig(settingsProvider CORSSettingsProvider) CORSConfig {
+	return CORSConfig{
+		// Static fallback values (used when system_settings is unavailable)
+		AllowedOrigins:    []string{"*"},
+		AllowedMethods:    []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:    []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		ExposedHeaders:    []string{"Link", "X-Total-Count", "X-Request-ID"},
+		AllowCredentials:  false,
+		MaxAge:            86400, // 24 hours (will be overridden by system_settings)
+		UseSystemSettings: true,  // Enable dynamic loading
+		SettingsProvider:  settingsProvider,
+	}
+}
+
+// CORSMiddleware handles Cross-Origin Resource Sharing with dynamic settings
 func CORSMiddleware(config CORSConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get("Origin")
+			origin := httpx.GetOrigin(r)
+
+			// Get dynamic CORS settings
+			settings := config.GetDynamicSettings()
+			if settings == nil {
+				// Fallback to static config if dynamic loading fails
+				settings = &config
+			}
 
 			// Set Vary headers for proper caching
 			w.Header().Add("Vary", "Origin")
@@ -129,44 +217,44 @@ func CORSMiddleware(config CORSConfig) func(http.Handler) http.Handler {
 				w.Header().Add("Vary", "Access-Control-Request-Headers")
 			}
 
-			// Check if origin is allowed
-			if isOriginAllowed(origin, config.AllowedOrigins) {
+			// Check if origin is allowed using improved logic
+			if origin != "" && httpx.IsOriginAllowed(origin, settings.AllowedOrigins) {
 				// Handle wildcard vs specific origin for credentials
-				if config.AllowCredentials && origin != "" {
+				if settings.AllowCredentials && origin != "" {
 					// When credentials are allowed, we must specify the exact origin
 					w.Header().Set("Access-Control-Allow-Origin", origin)
-				} else if len(config.AllowedOrigins) == 1 && config.AllowedOrigins[0] == "*" {
+				} else if len(settings.AllowedOrigins) == 1 && settings.AllowedOrigins[0] == "*" {
 					// Only use wildcard when credentials are not allowed
 					w.Header().Set("Access-Control-Allow-Origin", "*")
-				} else if origin != "" {
+				} else {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 				}
 			}
 
 			// Set other CORS headers
-			if len(config.AllowedMethods) > 0 {
-				w.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowedMethods, ", "))
+			if len(settings.AllowedMethods) > 0 {
+				w.Header().Set("Access-Control-Allow-Methods", strings.Join(settings.AllowedMethods, ", "))
 			}
 
-			if len(config.AllowedHeaders) > 0 {
-				w.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
+			if len(settings.AllowedHeaders) > 0 {
+				w.Header().Set("Access-Control-Allow-Headers", strings.Join(settings.AllowedHeaders, ", "))
 			}
 
-			if len(config.ExposedHeaders) > 0 {
-				w.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposedHeaders, ", "))
+			if len(settings.ExposedHeaders) > 0 {
+				w.Header().Set("Access-Control-Expose-Headers", strings.Join(settings.ExposedHeaders, ", "))
 			}
 
-			if config.AllowCredentials {
+			if settings.AllowCredentials {
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 			}
 
-			if config.MaxAge > 0 {
-				w.Header().Set("Access-Control-Max-Age", fmt.Sprintf("%d", config.MaxAge))
+			if settings.MaxAge > 0 {
+				w.Header().Set("Access-Control-Max-Age", fmt.Sprintf("%d", settings.MaxAge))
 			}
 
 			// Handle preflight requests
 			if r.Method == "OPTIONS" {
-				if config.OptionsPassthrough {
+				if settings.OptionsPassthrough {
 					next.ServeHTTP(w, r)
 				} else {
 					w.WriteHeader(http.StatusNoContent)
@@ -179,22 +267,7 @@ func CORSMiddleware(config CORSConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// isOriginAllowed checks if the origin is in the allowed list
-func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	for _, allowed := range allowedOrigins {
-		if allowed == "*" || allowed == origin {
-			return true
-		}
-		// Support wildcard subdomains (e.g., *.example.com)
-		if strings.HasPrefix(allowed, "*.") {
-			domain := allowed[2:]
-			if strings.HasSuffix(origin, "."+domain) || origin == domain {
-				return true
-			}
-		}
-	}
-	return false
-}
+// Note: isOriginAllowed has been moved to pkg/httpx for better reusability
 
 // CSRFMiddleware provides CSRF protection
 func CSRFMiddleware(config SecurityConfig) func(http.Handler) http.Handler {
@@ -277,15 +350,19 @@ func validateCSRFToken(r *http.Request, config SecurityConfig) bool {
 		return false
 	}
 
-	// Compare tokens
-	return headerToken != "" && headerToken == cookie.Value
+	// Compare tokens using constant-time comparison to prevent timing attacks
+	if headerToken == "" || len(headerToken) != len(cookie.Value) {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(headerToken), []byte(cookie.Value)) == 1
 }
 
 // LoggingMiddleware logs HTTP requests
 func LoggingMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
+			start := time.Now().UTC()
 
 			// Create a response writer wrapper to capture status code
 			wrapper := &responseWriterWrapper{ResponseWriter: w, statusCode: 200}
@@ -294,15 +371,21 @@ func LoggingMiddleware() func(http.Handler) http.Handler {
 
 			duration := time.Since(start)
 
-			// Log request details (in production, use structured logging)
-			fmt.Printf("[%s] %s %s %d %v %s\n",
-				start.Format("2006-01-02 15:04:05"),
-				r.Method,
-				r.URL.Path,
-				wrapper.statusCode,
-				duration,
-				r.UserAgent(),
-			)
+			// Structured logging for HTTP requests
+			requestID := fmt.Sprintf("req_%d", time.Now().UTC().UnixNano())
+			ctx := logger.WithRequestID(r.Context(), requestID)
+
+			logger.Info(ctx, "HTTP request completed", logger.Fields{
+				"method":      r.Method,
+				"path":        r.URL.Path,
+				"status_code": wrapper.statusCode,
+				"duration_ms": duration.Milliseconds(),
+				"client_ip":   httpx.GetClientIP(r),
+				"user_agent":  httpx.GetUserAgent(r),
+			})
+
+			// Prometheus metrics
+			metrics.ObserveHTTPRequest(r.Method, r.URL.Path, fmt.Sprintf("%d", wrapper.statusCode), start)
 		})
 	}
 }
@@ -325,7 +408,7 @@ func RecoveryMiddleware() func(http.Handler) http.Handler {
 			defer func() {
 				if err := recover(); err != nil {
 					// Log the panic (in production, use structured logging)
-					fmt.Printf("PANIC: %v\n", err)
+					logger.LogPanic(context.Background(), err)
 
 					// Return 500 error
 					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -344,7 +427,7 @@ func RequestIDMiddleware() func(http.Handler) http.Handler {
 			// Generate request ID
 			requestID, err := generateRequestID()
 			if err != nil {
-				requestID = fmt.Sprintf("req_%d", time.Now().UnixNano())
+				requestID = fmt.Sprintf("req_%d", time.Now().UTC().UnixNano())
 			}
 
 			// Add to response header

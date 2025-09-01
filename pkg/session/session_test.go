@@ -40,8 +40,8 @@ func TestNewSessionManager(t *testing.T) {
 		t.Errorf("Cookie name mismatch: got %s, want %s", sm.config.CookieName, config.CookieName)
 	}
 
-	if sm.sessions == nil {
-		t.Error("Sessions map not initialized")
+	if sm.storage == nil {
+		t.Error("Storage not initialized")
 	}
 }
 
@@ -57,7 +57,7 @@ func TestCreateSession(t *testing.T) {
 	ipAddress := "192.168.1.1"
 	userAgent := "Test Agent"
 
-	sessionID, sessionData, err := sm.CreateSession(userID, role, email, refreshToken, ipAddress, userAgent)
+	sessionID, sessionData, err := sm.CreateSession(userID, role, email, "access_token_123", refreshToken, ipAddress, userAgent)
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestGetSession(t *testing.T) {
 	refreshToken := "refresh_token_123"
 
 	// Create session
-	sessionID, _, err := sm.CreateSession(userID, role, email, refreshToken, "", "")
+	sessionID, _, err := sm.CreateSession(userID, role, email, "access_token", refreshToken, "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestGetSessionExpired(t *testing.T) {
 	sm := NewSessionManager(config)
 
 	userID := int64(123)
-	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestUpdateSession(t *testing.T) {
 	sm := NewSessionManager(config)
 
 	userID := int64(123)
-	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestDeleteSession(t *testing.T) {
 	sm := NewSessionManager(config)
 
 	userID := int64(123)
-	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+	sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -247,18 +247,18 @@ func TestDeleteUserSessions(t *testing.T) {
 	userID := int64(123)
 
 	// Create multiple sessions for the same user
-	_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token1", "", "")
+	_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access1", "token1", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
-	_, _, err = sm.CreateSession(userID, "verified", "test@example.com", "token2", "", "")
+	_, _, err = sm.CreateSession(userID, "verified", "test@example.com", "access2", "token2", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
 	// Create session for different user
-	_, _, err = sm.CreateSession(456, "verified", "other@example.com", "token3", "", "")
+	_, _, err = sm.CreateSession(456, "verified", "other@example.com", "access3", "token3", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestExtendSession(t *testing.T) {
 	sm := NewSessionManager(config)
 
 	userID := int64(123)
-	sessionID, originalData, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+	sessionID, originalData, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -417,12 +417,12 @@ func TestGetUserSessions(t *testing.T) {
 	userID := int64(123)
 
 	// Create multiple sessions for the user
-	_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token1", "", "")
+	_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access1", "token1", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
-	_, _, err = sm.CreateSession(userID, "verified", "test@example.com", "token2", "", "")
+	_, _, err = sm.CreateSession(userID, "verified", "test@example.com", "access2", "token2", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -450,12 +450,12 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	userID := int64(123)
 
 	// Create sessions
-	_, _, err := sm.CreateSession(userID, "verified", "test1@example.com", "token1", "", "")
+	_, _, err := sm.CreateSession(userID, "verified", "test1@example.com", "access1", "token1", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
-	_, _, err = sm.CreateSession(userID, "verified", "test2@example.com", "token2", "", "")
+	_, _, err = sm.CreateSession(userID, "verified", "test2@example.com", "access2", "token2", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -479,12 +479,12 @@ func TestGetStats(t *testing.T) {
 	userID2 := int64(456)
 
 	// Create sessions
-	_, _, err := sm.CreateSession(userID1, "verified", "test1@example.com", "token1", "", "")
+	_, _, err := sm.CreateSession(userID1, "verified", "test1@example.com", "access1", "token1", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
 
-	_, _, err = sm.CreateSession(userID2, "verified", "test2@example.com", "token2", "", "")
+	_, _, err = sm.CreateSession(userID2, "verified", "test2@example.com", "access2", "token2", "", "")
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -495,12 +495,8 @@ func TestGetStats(t *testing.T) {
 		t.Errorf("Total sessions should be 2, got %v", stats["total_sessions"])
 	}
 
-	if stats["active_sessions"].(int) != 2 {
-		t.Errorf("Active sessions should be 2, got %v", stats["active_sessions"])
-	}
-
-	if stats["unique_users"].(int) != 2 {
-		t.Errorf("Unique users should be 2, got %v", stats["unique_users"])
+	if stats["active_count"].(int) != 2 {
+		t.Errorf("Active sessions should be 2, got %v", stats["active_count"])
 	}
 
 	if stats["cookie_name"].(string) != config.CookieName {
@@ -549,7 +545,7 @@ func BenchmarkCreateSession(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		userID := int64(i)
-		_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+		_, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 		if err != nil {
 			b.Fatalf("CreateSession failed: %v", err)
 		}
@@ -565,7 +561,7 @@ func BenchmarkGetSession(b *testing.B) {
 	sessionIDs := make([]string, b.N)
 	for i := 0; i < b.N; i++ {
 		userID := int64(i)
-		sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "token", "", "")
+		sessionID, _, err := sm.CreateSession(userID, "verified", "test@example.com", "access_token", "refresh_token", "", "")
 		if err != nil {
 			b.Fatalf("CreateSession failed: %v", err)
 		}

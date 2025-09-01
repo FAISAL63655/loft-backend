@@ -5,8 +5,8 @@
 -- إنشاء أنواع البيانات للمنتجات
 CREATE TYPE product_type AS ENUM ('pigeon', 'supply');
 CREATE TYPE product_status AS ENUM (
-    'available', 'reserved', 'payment_in_progress', 
-    'in_auction', 'auction_hold', 'sold', 
+    'available', 'reserved', 'payment_in_progress',
+    'in_auction', 'auction_hold', 'sold',
     'out_of_stock', 'archived'
 );
 CREATE TYPE pigeon_sex AS ENUM ('male', 'female', 'unknown');
@@ -21,6 +21,8 @@ CREATE TABLE products (
     description TEXT,
     price_net NUMERIC(12,2) NOT NULL DEFAULT 0.00 CHECK (price_net >= 0),
     status product_status NOT NULL DEFAULT 'available',
+    reserved_by BIGINT NULL REFERENCES users(id),
+    reserved_expires_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -29,10 +31,14 @@ CREATE TABLE products (
 CREATE INDEX idx_products_type ON products(type);
 CREATE INDEX idx_products_status ON products(status);
 CREATE INDEX idx_products_created_at ON products(created_at DESC);
+-- فهرس لدعم الاستعلام عن الحجوزات حسب المستخدم ووقت الانتهاء
+CREATE INDEX idx_products_reserved_by ON products(reserved_by) WHERE reserved_by IS NOT NULL;
+CREATE INDEX idx_products_reserved_expiry ON products(reserved_expires_at) WHERE reserved_expires_at IS NOT NULL;
+
 CREATE INDEX idx_products_type_status ON products(type, status);
 
 -- فهرس للمنتجات المتاحة والنشطة
-CREATE INDEX idx_products_available ON products(status, created_at DESC) 
+CREATE INDEX idx_products_available ON products(status, created_at DESC)
 WHERE status IN ('available', 'in_auction');
 
 -- جدول تفاصيل الحمام
@@ -60,7 +66,7 @@ CREATE TABLE supplies (
     low_stock_threshold INTEGER NOT NULL DEFAULT 5,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
+
     -- قيد للتأكد من أن الكمية لا تقل عن الصفر
     CONSTRAINT chk_supplies_stock_qty_non_negative CHECK (stock_qty >= 0),
     CONSTRAINT chk_supplies_threshold_positive CHECK (low_stock_threshold > 0)
@@ -69,7 +75,7 @@ CREATE TABLE supplies (
 -- فهارس للمستلزمات
 CREATE INDEX idx_supplies_sku ON supplies(sku) WHERE sku IS NOT NULL;
 CREATE INDEX idx_supplies_stock_qty ON supplies(stock_qty);
-CREATE INDEX idx_supplies_low_stock ON supplies(stock_qty, low_stock_threshold) 
+CREATE INDEX idx_supplies_low_stock ON supplies(stock_qty, low_stock_threshold)
 WHERE stock_qty <= low_stock_threshold;
 
 -- جدول الوسائط
@@ -93,24 +99,24 @@ CREATE INDEX idx_media_product_id ON media(product_id);
 CREATE INDEX idx_media_kind ON media(kind);
 
 -- فهرس جزئي للوسائط غير المؤرشفة (كما هو مطلوب في PRD)
-CREATE INDEX idx_media_product_unarchived ON media(product_id, created_at DESC) 
+CREATE INDEX idx_media_product_unarchived ON media(product_id, created_at DESC)
 WHERE archived_at IS NULL;
 
 -- إضافة triggers لتحديث updated_at
-CREATE TRIGGER update_products_updated_at 
-    BEFORE UPDATE ON products 
+CREATE TRIGGER update_products_updated_at
+    BEFORE UPDATE ON products
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_pigeons_updated_at 
-    BEFORE UPDATE ON pigeons 
+CREATE TRIGGER update_pigeons_updated_at
+    BEFORE UPDATE ON pigeons
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_supplies_updated_at 
-    BEFORE UPDATE ON supplies 
+CREATE TRIGGER update_supplies_updated_at
+    BEFORE UPDATE ON supplies
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_media_updated_at 
-    BEFORE UPDATE ON media 
+CREATE TRIGGER update_media_updated_at
+    BEFORE UPDATE ON media
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- دالة لتحديث حالة المستلزمات عند نفاد المخزون
@@ -119,16 +125,16 @@ RETURNS TRIGGER AS $$
 BEGIN
     -- إذا وصلت الكمية إلى صفر، غيّر حالة المنتج إلى out_of_stock
     IF NEW.stock_qty = 0 AND OLD.stock_qty > 0 THEN
-        UPDATE products 
-        SET status = 'out_of_stock' 
+        UPDATE products
+        SET status = 'out_of_stock'
         WHERE id = NEW.product_id AND type = 'supply';
     -- إذا أصبحت الكمية أكبر من صفر، غيّر الحالة إلى available
     ELSIF NEW.stock_qty > 0 AND OLD.stock_qty = 0 THEN
-        UPDATE products 
-        SET status = 'available' 
+        UPDATE products
+        SET status = 'available'
         WHERE id = NEW.product_id AND type = 'supply';
     END IF;
-    
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -142,16 +148,16 @@ CREATE TRIGGER update_supply_status_trigger
 CREATE OR REPLACE FUNCTION validate_product_status()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- التحقق من أن حالات معينة مخصصة للحمام فقط
-    IF NEW.type = 'supply' AND NEW.status IN ('reserved', 'payment_in_progress', 'sold', 'auction_hold', 'in_auction') THEN
-        RAISE EXCEPTION 'Status % is not valid for supply products', NEW.status;
+    -- التحقق من أن حالات المزاد مخصصة للحمام فقط
+    IF NEW.type = 'supply' AND NEW.status IN ('auction_hold', 'in_auction') THEN
+        RAISE EXCEPTION 'Auction status % is not valid for supply products', NEW.status;
     END IF;
-    
+
     -- التحقق من أن out_of_stock مخصص للمستلزمات فقط
     IF NEW.type = 'pigeon' AND NEW.status = 'out_of_stock' THEN
         RAISE EXCEPTION 'Status out_of_stock is not valid for pigeon products';
     END IF;
-    
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

@@ -1,11 +1,14 @@
-// Package rate_limit provides rate limiting functionality for authentication endpoints
-package rate_limit
+// Package ratelimit provides rate limiting functionality for authentication endpoints
+package ratelimit
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -54,7 +57,7 @@ func NewRateLimiterWithStorage(config RateLimitConfig, storage Storage) *RateLim
 		cleanupStop:    make(chan struct{}),
 		cleanupEnabled: false,
 	}
-	
+
 	return rl
 }
 
@@ -63,16 +66,18 @@ func (rl *RateLimiter) EnableAutoCleanup(interval time.Duration) {
 	if rl.cleanupEnabled {
 		return
 	}
-	
+
 	rl.cleanupEnabled = true
 	rl.cleanupTicker = time.NewTicker(interval)
-	
+
 	go func() {
 		for {
 			select {
 			case <-rl.cleanupTicker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_ = rl.storage.CleanupExpired(ctx, rl.config.Window)
+				if err := rl.storage.CleanupExpired(ctx, rl.config.Window); err != nil {
+					log.Printf("RateLimiter storage error in CleanupExpired: %v", err)
+				}
 				cancel()
 			case <-rl.cleanupStop:
 				return
@@ -81,12 +86,27 @@ func (rl *RateLimiter) EnableAutoCleanup(interval time.Duration) {
 	}()
 }
 
+// hashSensitiveKey creates a hash of sensitive key for safe logging
+// This prevents exposure of IPs, emails, or user IDs in log files
+func hashSensitiveKey(key string) string {
+	if key == "" {
+		return "empty-key"
+	}
+
+	// Create SHA256 hash
+	hash := sha256.Sum256([]byte(key))
+
+	// Return first 8 characters of hex for readability
+	// This provides enough uniqueness for debugging while maintaining privacy
+	return hex.EncodeToString(hash[:4])
+}
+
 // DisableAutoCleanup stops automatic cleanup
 func (rl *RateLimiter) DisableAutoCleanup() {
 	if !rl.cleanupEnabled {
 		return
 	}
-	
+
 	rl.cleanupEnabled = false
 	if rl.cleanupTicker != nil {
 		rl.cleanupTicker.Stop()
@@ -104,11 +124,13 @@ func (rl *RateLimiter) IsAllowed(key string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	now := time.Now()
+	now := time.Now().UTC()
 	record, err := rl.storage.GetRecord(ctx, key)
 	if err != nil {
-		// On storage error, allow the request but log the error
-		// In production, you might want to handle this differently
+		// Log storage error for monitoring and debugging
+		log.Printf("RateLimiter storage error in GetRecord for key hash %s: %v", hashSensitiveKey(key), err)
+		// On storage error, allow the request to avoid blocking legitimate users
+		// In production, you might want to handle this differently based on your requirements
 		return true
 	}
 
@@ -120,7 +142,9 @@ func (rl *RateLimiter) IsAllowed(key string) bool {
 			FirstSeen: now,
 			LastSeen:  now,
 		}
-		_ = rl.storage.SetRecord(ctx, key, newRecord)
+		if err := rl.storage.SetRecord(ctx, key, newRecord); err != nil {
+			log.Printf("RateLimiter storage error in SetRecord for key hash %s: %v", hashSensitiveKey(key), err)
+		}
 		return true
 	}
 
@@ -141,7 +165,9 @@ func (rl *RateLimiter) IsAllowed(key string) bool {
 		record.Count = 1
 		record.FirstSeen = now
 		record.LastSeen = now
-		_ = rl.storage.SetRecord(ctx, key, record)
+		if err := rl.storage.SetRecord(ctx, key, record); err != nil {
+			log.Printf("RateLimiter storage error in SetRecord for key hash %s: %v", hashSensitiveKey(key), err)
+		}
 		return true
 	}
 
@@ -151,14 +177,18 @@ func (rl *RateLimiter) IsAllowed(key string) bool {
 		if rl.config.BlockTime > 0 && record.BlockedAt == nil {
 			record.BlockedAt = &now
 		}
-		_ = rl.storage.SetRecord(ctx, key, record)
+		if err := rl.storage.SetRecord(ctx, key, record); err != nil {
+			log.Printf("RateLimiter storage error in SetRecord for key hash %s: %v", hashSensitiveKey(key), err)
+		}
 		return false
 	}
 
 	// Increment count and allow
 	record.Count++
 	record.LastSeen = now
-	_ = rl.storage.SetRecord(ctx, key, record)
+	if err := rl.storage.SetRecord(ctx, key, record); err != nil {
+		log.Printf("RateLimiter storage error in SetRecord for key %s: %v", key, err)
+	}
 	return true
 }
 
@@ -184,7 +214,7 @@ func (rl *RateLimiter) GetRemainingAttempts(key string) int {
 		return rl.config.MaxAttempts
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// Check if blocked
 	if record.BlockedAt != nil && rl.config.BlockTime > 0 {
@@ -219,7 +249,7 @@ func (rl *RateLimiter) GetTimeUntilReset(key string) time.Duration {
 		return 0
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	// If blocked, return time until block expires
 	if record.BlockedAt != nil && rl.config.BlockTime > 0 {
@@ -256,7 +286,7 @@ func (rl *RateLimiter) IsBlocked(key string) bool {
 		return false
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	return now.Sub(*record.BlockedAt) < rl.config.BlockTime
 }
 
@@ -274,7 +304,7 @@ func (rl *RateLimiter) GetBlockTimeRemaining(key string) time.Duration {
 		return 0
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 	blockExpiry := record.BlockedAt.Add(rl.config.BlockTime)
 
 	if now.Before(blockExpiry) {
@@ -293,7 +323,9 @@ func (rl *RateLimiter) Reset(key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_ = rl.storage.DeleteRecord(ctx, key)
+	if err := rl.storage.DeleteRecord(ctx, key); err != nil {
+		log.Printf("RateLimiter storage error in DeleteRecord for key hash %s: %v", hashSensitiveKey(key), err)
+	}
 }
 
 // ResetAll clears all rate limits
@@ -380,17 +412,19 @@ func (rl *RateLimiter) GetStats() map[string]interface{} {
 func (rl *RateLimiter) Close() error {
 	// Stop auto cleanup if enabled
 	rl.DisableAutoCleanup()
-	
+
 	// Close storage
 	if rl.storage != nil {
 		return rl.storage.Close()
 	}
-	
+
 	return nil
 }
 
 // Predefined rate limiter configurations for common use cases
 var (
+	// Production Rate Limits (default)
+
 	// LoginRateLimit: 10 attempts per 10 minutes
 	LoginRateLimit = RateLimitConfig{
 		MaxAttempts: 10,
@@ -418,7 +452,73 @@ var (
 		Window:      time.Hour,
 		BlockTime:   30 * time.Minute,
 	}
+
+	// Development Rate Limits (faster for testing)
+
+	// LoginRateLimitDev: 10 attempts per 10 seconds (for development/testing)
+	LoginRateLimitDev = RateLimitConfig{
+		MaxAttempts: 10,
+		Window:      10 * time.Second,
+		BlockTime:   30 * time.Second, // Short block for dev
+	}
+
+	// RegistrationRateLimitDev: 5 attempts per 5 minutes
+	RegistrationRateLimitDev = RateLimitConfig{
+		MaxAttempts: 5,
+		Window:      5 * time.Minute,
+		BlockTime:   2 * time.Minute,
+	}
+
+	// EmailVerificationRateLimitDev: 3 attempts per 5 minutes
+	EmailVerificationRateLimitDev = RateLimitConfig{
+		MaxAttempts: 3,
+		Window:      5 * time.Minute,
+		BlockTime:   1 * time.Minute,
+	}
+
+	// PasswordResetRateLimitDev: 5 attempts per 10 minutes
+	PasswordResetRateLimitDev = RateLimitConfig{
+		MaxAttempts: 5,
+		Window:      10 * time.Minute,
+		BlockTime:   2 * time.Minute,
+	}
 )
+
+// GetRateLimitConfig returns appropriate rate limit config based on environment
+func GetRateLimitConfig(configType string, isDevelopment bool) RateLimitConfig {
+	switch configType {
+	case "login":
+		if isDevelopment {
+			return LoginRateLimitDev
+		}
+		return LoginRateLimit
+
+	case "registration":
+		if isDevelopment {
+			return RegistrationRateLimitDev
+		}
+		return RegistrationRateLimit
+
+	case "email_verification":
+		if isDevelopment {
+			return EmailVerificationRateLimitDev
+		}
+		return EmailVerificationRateLimit
+
+	case "password_reset":
+		if isDevelopment {
+			return PasswordResetRateLimitDev
+		}
+		return PasswordResetRateLimit
+
+	default:
+		// Default to login rate limit
+		if isDevelopment {
+			return LoginRateLimitDev
+		}
+		return LoginRateLimit
+	}
+}
 
 // GenerateKey generates a rate limit key based on the provided components
 // Uses base64 encoding to prevent key collision when components contain ":"

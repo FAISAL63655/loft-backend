@@ -1,5 +1,5 @@
-// Package rate_limit provides rate limiting functionality for authentication endpoints
-package rate_limit
+// Package ratelimit provides rate limiting functionality for authentication endpoints
+package ratelimit
 
 import (
 	"context"
@@ -11,19 +11,19 @@ import (
 type Storage interface {
 	// GetRecord retrieves an attempt record for the given key
 	GetRecord(ctx context.Context, key string) (*AttemptRecord, error)
-	
+
 	// SetRecord stores an attempt record for the given key
 	SetRecord(ctx context.Context, key string, record *AttemptRecord) error
-	
+
 	// DeleteRecord removes an attempt record for the given key
 	DeleteRecord(ctx context.Context, key string) error
-	
+
 	// CleanupExpired removes all expired records
 	CleanupExpired(ctx context.Context, window time.Duration) error
-	
+
 	// GetStats returns storage statistics
 	GetStats(ctx context.Context) (map[string]interface{}, error)
-	
+
 	// Close closes the storage connection
 	Close() error
 }
@@ -45,19 +45,19 @@ func NewMemoryStorage() *MemoryStorage {
 func (ms *MemoryStorage) GetRecord(ctx context.Context, key string) (*AttemptRecord, error) {
 	ms.mutex.RLock()
 	defer ms.mutex.RUnlock()
-	
+
 	record, exists := ms.attempts[key]
 	if !exists {
 		return nil, nil
 	}
-	
+
 	// Return a copy to prevent external modification
 	recordCopy := *record
 	if record.BlockedAt != nil {
 		blockedAtCopy := *record.BlockedAt
 		recordCopy.BlockedAt = &blockedAtCopy
 	}
-	
+
 	return &recordCopy, nil
 }
 
@@ -65,14 +65,14 @@ func (ms *MemoryStorage) GetRecord(ctx context.Context, key string) (*AttemptRec
 func (ms *MemoryStorage) SetRecord(ctx context.Context, key string, record *AttemptRecord) error {
 	ms.mutex.Lock()
 	defer ms.mutex.Unlock()
-	
+
 	// Store a copy to prevent external modification
 	recordCopy := *record
 	if record.BlockedAt != nil {
 		blockedAtCopy := *record.BlockedAt
 		recordCopy.BlockedAt = &blockedAtCopy
 	}
-	
+
 	ms.attempts[key] = &recordCopy
 	return nil
 }
@@ -81,7 +81,7 @@ func (ms *MemoryStorage) SetRecord(ctx context.Context, key string, record *Atte
 func (ms *MemoryStorage) DeleteRecord(ctx context.Context, key string) error {
 	ms.mutex.Lock()
 	defer ms.mutex.Unlock()
-	
+
 	delete(ms.attempts, key)
 	return nil
 }
@@ -90,8 +90,8 @@ func (ms *MemoryStorage) DeleteRecord(ctx context.Context, key string) error {
 func (ms *MemoryStorage) CleanupExpired(ctx context.Context, window time.Duration) error {
 	ms.mutex.Lock()
 	defer ms.mutex.Unlock()
-	
-	now := time.Now()
+
+	now := time.Now().UTC()
 	for key, record := range ms.attempts {
 		// Remove records that are older than the window and not blocked
 		if record.BlockedAt == nil && now.Sub(record.FirstSeen) > window {
@@ -102,7 +102,7 @@ func (ms *MemoryStorage) CleanupExpired(ctx context.Context, window time.Duratio
 			delete(ms.attempts, key)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -110,18 +110,18 @@ func (ms *MemoryStorage) CleanupExpired(ctx context.Context, window time.Duratio
 func (ms *MemoryStorage) GetStats(ctx context.Context) (map[string]interface{}, error) {
 	ms.mutex.RLock()
 	defer ms.mutex.RUnlock()
-	
+
 	stats := map[string]interface{}{
-		"type":           "memory",
-		"total_records":  len(ms.attempts),
-		"blocked_count":  0,
-		"active_count":   0,
+		"type":          "memory",
+		"total_records": len(ms.attempts),
+		"blocked_count": 0,
+		"active_count":  0,
 	}
-	
-	now := time.Now()
+
+	now := time.Now().UTC()
 	blockedCount := 0
 	activeCount := 0
-	
+
 	for _, record := range ms.attempts {
 		if record.BlockedAt != nil {
 			blockedCount++
@@ -129,11 +129,11 @@ func (ms *MemoryStorage) GetStats(ctx context.Context) (map[string]interface{}, 
 			activeCount++
 		}
 	}
-	
+
 	stats["blocked_count"] = blockedCount
 	stats["active_count"] = activeCount
 	stats["timestamp"] = now
-	
+
 	return stats, nil
 }
 
@@ -141,7 +141,7 @@ func (ms *MemoryStorage) GetStats(ctx context.Context) (map[string]interface{}, 
 func (ms *MemoryStorage) Close() error {
 	ms.mutex.Lock()
 	defer ms.mutex.Unlock()
-	
+
 	// Clear all records
 	ms.attempts = make(map[string]*AttemptRecord)
 	return nil
