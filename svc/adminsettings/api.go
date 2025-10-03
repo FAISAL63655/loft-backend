@@ -26,6 +26,38 @@ type Service struct {
 	cfg *config.ConfigManager
 }
 
+//encore:api auth method=POST path=/admin/cities
+func (s *Service) CreateCity(ctx context.Context, req *CreateCityRequest) (*ListCitiesResponse, error) {
+    if _, ok := auth.UserID(); !ok {
+        return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+    }
+    if !isAdmin() {
+        return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+    }
+    if req == nil || strings.TrimSpace(req.NameAr) == "" || strings.TrimSpace(req.ShippingFeeNet) == "" {
+        return nil, errs.New(errs.InvalidArgument, "الاسم العربي وقيمة الشحن مطلوبة")
+    }
+    // Basic numeric validation for shipping fee
+    if _, err := strconv.ParseFloat(strings.TrimSpace(req.ShippingFeeNet), 64); err != nil {
+        return nil, errs.New(errs.ValidationFailed, "قيمة رسوم الشحن غير صالحة")
+    }
+
+    nameEn := ""
+    if req.NameEn != nil {
+        nameEn = strings.TrimSpace(*req.NameEn)
+    }
+
+    // Insert city
+    if _, err := db.Stdlib().ExecContext(ctx,
+        `INSERT INTO cities (name_ar, name_en, shipping_fee_net, enabled) VALUES ($1, $2, $3, $4)`,
+        strings.TrimSpace(req.NameAr), nameEn, strings.TrimSpace(req.ShippingFeeNet), req.Enabled,
+    ); err != nil {
+        return nil, errs.New(errs.Internal, "فشل إنشاء المدينة")
+    }
+
+    return s.ListCities(ctx)
+}
+
 func initService() (*Service, error) {
 	// Initialize global config manager (safe to call once via sync.Once)
 	cfg := config.Initialize(db, 30*time.Second)
@@ -643,6 +675,9 @@ type ListVerificationRequestsRequest struct {
 type VerificationRequestItem struct {
 	ID         int64   `json:"id"`
 	UserID     int64   `json:"user_id"`
+	UserName   string  `json:"user_name"`
+	UserEmail  string  `json:"user_email"`
+	UserPhone  string  `json:"user_phone"`
 	Status     string  `json:"status"`
 	Note       *string `json:"note,omitempty"`
 	ReviewedBy *int64  `json:"reviewed_by,omitempty"`
@@ -678,14 +713,14 @@ func (s *Service) ListVerificationRequests(ctx context.Context, req *ListVerific
 	}
 	offset := (page - 1) * limit
 
-	base := "SELECT id, user_id, status::text, note, reviewed_by, to_char(reviewed_at at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), to_char(created_at at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM verification_requests"
+	base := "SELECT vr.id, vr.user_id, u.name, u.email, u.phone, vr.status::text, vr.note, vr.reviewed_by, to_char(vr.reviewed_at at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), to_char(vr.created_at at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM verification_requests vr LEFT JOIN users u ON vr.user_id = u.id"
 	where := ""
 	args := []interface{}{}
 	if req != nil && req.Status != "" {
-		where = " WHERE status = $1"
+		where = " WHERE vr.status = $1"
 		args = append(args, req.Status)
 	}
-	order := " ORDER BY created_at DESC"
+	order := " ORDER BY vr.created_at DESC"
 	pag := fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
 	rows, err := db.Stdlib().QueryContext(ctx, base+where+order+pag, args...)
@@ -702,10 +737,14 @@ func (s *Service) ListVerificationRequests(ctx context.Context, req *ListVerific
 		var reviewedBy sql.NullInt64
 		var reviewedAt sql.NullString
 		var created string
-		if err := rows.Scan(&it.ID, &it.UserID, &status, &note, &reviewedBy, &reviewedAt, &created); err != nil {
+		var userName, userEmail, userPhone sql.NullString
+		if err := rows.Scan(&it.ID, &it.UserID, &userName, &userEmail, &userPhone, &status, &note, &reviewedBy, &reviewedAt, &created); err != nil {
 			return nil, errs.New(errs.Internal, "فشل قراءة صف")
 		}
 		it.Status = status
+		it.UserName = userName.String
+		it.UserEmail = userEmail.String
+		it.UserPhone = userPhone.String
 		if note.Valid {
 			v := note.String
 			it.Note = &v
@@ -724,7 +763,7 @@ func (s *Service) ListVerificationRequests(ctx context.Context, req *ListVerific
 
 	// Count total
 	var total int64
-	countQuery := "SELECT COUNT(*) FROM verification_requests" + strings.Replace(where, " WHERE", " WHERE", 1)
+	countQuery := "SELECT COUNT(*) FROM verification_requests vr" + strings.Replace(where, " WHERE vr.", " WHERE ", 1)
 	if err := db.Stdlib().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		total = int64(len(items))
 	}
@@ -1102,12 +1141,21 @@ type ListAuctionsRequest struct {
 }
 
 type AdminAuctionItem struct {
-	ID        int64  `json:"id"`
-	ProductID int64  `json:"product_id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	StartAt   string `json:"start_at"`
-	EndAt     string `json:"end_at"`
+	ID                    int64   `json:"id"`
+	ProductID             int64   `json:"product_id"`
+	Title                 string  `json:"title"`
+	Status                string  `json:"status"`
+	StartPrice            string  `json:"start_price"`
+	BidStep               int     `json:"bid_step"`
+	ReservePrice          *string `json:"reserve_price,omitempty"`
+	CurrentPrice          *string `json:"current_price,omitempty"`
+	BidsCount             int     `json:"bids_count"`
+	AntiSnipingMinutes    int     `json:"anti_sniping_minutes"`
+	ExtensionsCount       int     `json:"extensions_count"`
+	MaxExtensionsOverride *int    `json:"max_extensions_override,omitempty"`
+	WinnerUserID          *int64  `json:"winner_user_id,omitempty"`
+	StartAt               string  `json:"start_at"`
+	EndAt                 string  `json:"end_at"`
 }
 
 type ListAuctionsResponse struct {
@@ -1138,10 +1186,26 @@ func (s *Service) ListAuctions(ctx context.Context, req *ListAuctionsRequest) (*
 	}
 	offset := (page - 1) * limit
 
-	base := `SELECT a.id, a.product_id, COALESCE(p.title,''), a.status::text,
-                     to_char(a.start_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-                     to_char(a.end_at   at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
-              FROM auctions a JOIN products p ON p.id = a.product_id`
+	base := `SELECT 
+		a.id, 
+		a.product_id, 
+		COALESCE(p.title,'') as title, 
+		a.status::text,
+		a.start_price::text,
+		a.bid_step,
+		a.reserve_price::text,
+		(SELECT b.amount::text FROM bids b WHERE b.auction_id = a.id ORDER BY b.created_at DESC LIMIT 1) as current_price,
+		(SELECT COUNT(*) FROM bids b WHERE b.auction_id = a.id)::int as bids_count,
+		a.anti_sniping_minutes,
+		a.extensions_count,
+		a.max_extensions_override,
+		CASE WHEN a.status IN ('ended','winner_unpaid') 
+			THEN (SELECT b.user_id FROM bids b WHERE b.auction_id = a.id ORDER BY b.created_at DESC LIMIT 1)
+			ELSE NULL 
+		END as winner_user_id,
+		to_char(a.start_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+		to_char(a.end_at   at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+	FROM auctions a JOIN products p ON p.id = a.product_id`
 
 	var whereParts []string
 	var args []interface{}
@@ -1171,9 +1235,45 @@ func (s *Service) ListAuctions(ctx context.Context, req *ListAuctionsRequest) (*
 	items := make([]AdminAuctionItem, 0, limit)
 	for rows.Next() {
 		var it AdminAuctionItem
-		if err := rows.Scan(&it.ID, &it.ProductID, &it.Title, &it.Status, &it.StartAt, &it.EndAt); err != nil {
+		var reservePrice sql.NullString
+		var currentPrice sql.NullString
+		var maxExt sql.NullInt64
+		var winnerID sql.NullInt64
+		
+		if err := rows.Scan(
+			&it.ID, 
+			&it.ProductID, 
+			&it.Title, 
+			&it.Status,
+			&it.StartPrice,
+			&it.BidStep,
+			&reservePrice,
+			&currentPrice,
+			&it.BidsCount,
+			&it.AntiSnipingMinutes,
+			&it.ExtensionsCount,
+			&maxExt,
+			&winnerID,
+			&it.StartAt, 
+			&it.EndAt,
+		); err != nil {
 			return nil, errs.New(errs.Internal, "فشل قراءة صف مزاد")
 		}
+		
+		if reservePrice.Valid {
+			it.ReservePrice = &reservePrice.String
+		}
+		if currentPrice.Valid {
+			it.CurrentPrice = &currentPrice.String
+		}
+		if maxExt.Valid {
+			v := int(maxExt.Int64)
+			it.MaxExtensionsOverride = &v
+		}
+		if winnerID.Valid {
+			it.WinnerUserID = &winnerID.Int64
+		}
+		
 		items = append(items, it)
 	}
 
@@ -1393,6 +1493,13 @@ type ListShipmentsResponse struct {
 	Limit int                 `json:"limit"`
 }
 
+type CreateShipmentRequest struct {
+	OrderID        int64   `json:"order_id"`
+	DeliveryMethod string  `json:"delivery_method"`           // courier | pickup
+	CompanyID      *int64  `json:"company_id,omitempty"`
+	TrackingRef    *string `json:"tracking_ref,omitempty"`
+}
+
 //encore:api auth method=GET path=/admin/shipments
 func (s *Service) ListShipments(ctx context.Context, req *ListShipmentsRequest) (*ListShipmentsResponse, error) {
 	if _, ok := auth.UserID(); !ok {
@@ -1465,6 +1572,51 @@ func (s *Service) ListShipments(ctx context.Context, req *ListShipmentsRequest) 
 	return &ListShipmentsResponse{Items: items, Total: total, Page: page, Limit: limit}, nil
 }
 
+//encore:api auth method=POST path=/admin/shipments
+func (s *Service) CreateShipment(ctx context.Context, req *CreateShipmentRequest) (*AdminShipmentItem, error) {
+	if _, ok := auth.UserID(); !ok {
+		return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	if !isAdmin() {
+		return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+	if req == nil || req.OrderID <= 0 || strings.TrimSpace(req.DeliveryMethod) == "" {
+		return nil, errs.New(errs.InvalidArgument, "order_id و delivery_method مطلوبة")
+	}
+	dm := strings.ToLower(strings.TrimSpace(req.DeliveryMethod))
+	if dm != "courier" && dm != "pickup" {
+		return nil, errs.New(errs.ValidationFailed, "delivery_method يجب أن تكون courier أو pickup")
+	}
+
+	// Ensure order exists and is paid (friendly validation before DB trigger)
+	var ordStatus string
+	if err := db.Stdlib().QueryRowContext(ctx, `SELECT status::text FROM orders WHERE id=$1`, req.OrderID).Scan(&ordStatus); err != nil {
+		return nil, errs.New(errs.NotFound, "الطلب غير موجود")
+	}
+	if ordStatus != "paid" {
+		return nil, errs.New(errs.ShpOrderNotPaid, "لا يمكن إنشاء شحنة لطلب غير مدفوع")
+	}
+
+	// Insert shipment
+	var it AdminShipmentItem
+	row := db.Stdlib().QueryRowContext(ctx, `
+        INSERT INTO shipments (order_id, company_id, delivery_method, tracking_ref)
+        VALUES ($1, $2, $3::delivery_method, $4)
+        RETURNING id, order_id, COALESCE(company_id, 0), delivery_method::text, status::text, tracking_ref,
+                  to_char(created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+    `, req.OrderID, req.CompanyID, dm, req.TrackingRef)
+
+	var tr sql.NullString
+	if err := row.Scan(&it.ID, &it.OrderID, &it.CompanyID, &it.DeliveryMethod, &it.Status, &tr, &it.CreatedAt); err != nil {
+		return nil, errs.New(errs.Internal, "فشل إنشاء الشحنة")
+	}
+	if tr.Valid {
+		v := tr.String
+		it.TrackingRef = &v
+	}
+	return &it, nil
+}
+
 type UpdateShipmentRequest struct {
 	Status      *string `json:"status,omitempty"`
 	TrackingRef *string `json:"tracking_ref,omitempty"`
@@ -1526,9 +1678,18 @@ type AdminCityItem struct {
 	Enabled        bool   `json:"enabled"`
 }
 
+type CreateCityRequest struct {
+	NameAr         string  `json:"name_ar"`
+	NameEn         *string `json:"name_en,omitempty"`
+	ShippingFeeNet string  `json:"shipping_fee_net"` // decimal as string
+	Enabled        bool    `json:"enabled"`
+}
+
 type ListCitiesResponse struct {
 	Items []AdminCityItem `json:"items"`
 }
+
+// duplicate CreateCity removed; see earlier definition
 
 //encore:api auth method=GET path=/admin/cities
 func (s *Service) ListCities(ctx context.Context) (*ListCitiesResponse, error) {
@@ -1587,4 +1748,149 @@ func (s *Service) UpdateCity(ctx context.Context, id int64, req *UpdateCityReque
 		return nil, errs.New(errs.Internal, "فشل تحديث المدينة")
 	}
 	return s.ListCities(ctx)
+}
+
+// ====== Admin: Archive Product ======
+
+type ArchiveProductRequest struct {
+	Reason *string `json:"reason,omitempty"`
+}
+
+type ArchiveProductResponse struct {
+	Message string `json:"message"`
+}
+
+//encore:api auth method=PATCH path=/admin/products/:id/archive
+func (s *Service) ArchiveProduct(ctx context.Context, id int64, req *ArchiveProductRequest) (*ArchiveProductResponse, error) {
+	uidStr, ok := auth.UserID()
+	if !ok {
+		return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	if !isAdmin() {
+		return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+
+	// Convert user ID for audit
+	var actorID *int64
+	if id64, err := strconv.ParseInt(string(uidStr), 10, 64); err == nil {
+		actorID = &id64
+	}
+
+	// Check current product status - prevent archiving products in critical states
+	var productType, status string
+	err := db.Stdlib().QueryRowContext(ctx,
+		`SELECT type::text, status::text FROM products WHERE id = $1`, id,
+	).Scan(&productType, &status)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errs.New(errs.NotFound, "المنتج غير موجود")
+		}
+		return nil, errs.New(errs.Internal, "فشل التحقق من المنتج")
+	}
+
+	// Prevent archiving products in critical states
+	forbiddenStatuses := []string{"in_auction", "auction_hold", "reserved", "payment_in_progress"}
+	for _, s := range forbiddenStatuses {
+		if status == s {
+			return nil, errs.New(errs.Conflict, fmt.Sprintf("لا يمكن أرشفة منتج في حالة '%s'. يجب إنهاء المزاد أو إلغاء الحجوزات أولاً", status))
+		}
+	}
+
+	// Update product status to archived
+	_, err = db.Stdlib().ExecContext(ctx,
+		`UPDATE products SET status = 'archived', updated_at = NOW() WHERE id = $1`,
+		id,
+	)
+
+	if err != nil {
+		return nil, errs.New(errs.Internal, "فشل أرشفة المنتج")
+	}
+
+	// Audit log
+	meta := map[string]interface{}{
+		"product_id":   id,
+		"product_type": productType,
+		"old_status":   status,
+		"new_status":   "archived",
+	}
+	if req != nil && req.Reason != nil {
+		meta["reason"] = *req.Reason
+	}
+
+	if _, aerr := audit.Log(ctx, db, audit.Entry{
+		ActorUserID: actorID,
+		Action:      "product.archive",
+		EntityType:  "product",
+		EntityID:    strconv.FormatInt(id, 10),
+		Meta:        meta,
+	}); aerr != nil {
+		logger.LogError(ctx, aerr, "failed to write audit log for product archive", logger.Fields{"product_id": id})
+	}
+
+	return &ArchiveProductResponse{Message: "تم أرشفة المنتج بنجاح"}, nil
+}
+
+// ====== Admin: Unarchive Product ======
+
+//encore:api auth method=PATCH path=/admin/products/:id/unarchive
+func (s *Service) UnarchiveProduct(ctx context.Context, id int64) (*ArchiveProductResponse, error) {
+	uidStr, ok := auth.UserID()
+	if !ok {
+		return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	if !isAdmin() {
+		return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+
+	// Convert user ID for audit
+	var actorID *int64
+	if id64, err := strconv.ParseInt(string(uidStr), 10, 64); err == nil {
+		actorID = &id64
+	}
+
+	// Check if product exists and is archived
+	var productType, status string
+	err := db.Stdlib().QueryRowContext(ctx,
+		`SELECT type::text, status::text FROM products WHERE id = $1`, id,
+	).Scan(&productType, &status)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errs.New(errs.NotFound, "المنتج غير موجود")
+		}
+		return nil, errs.New(errs.Internal, "فشل التحقق من المنتج")
+	}
+
+	if status != "archived" {
+		return nil, errs.New(errs.Conflict, "المنتج ليس مؤرشفاً")
+	}
+
+	// Restore to available status
+	_, err = db.Stdlib().ExecContext(ctx,
+		`UPDATE products SET status = 'available', updated_at = NOW() WHERE id = $1`,
+		id,
+	)
+
+	if err != nil {
+		return nil, errs.New(errs.Internal, "فشل إلغاء أرشفة المنتج")
+	}
+
+	// Audit log
+	if _, aerr := audit.Log(ctx, db, audit.Entry{
+		ActorUserID: actorID,
+		Action:      "product.unarchive",
+		EntityType:  "product",
+		EntityID:    strconv.FormatInt(id, 10),
+		Meta: map[string]interface{}{
+			"product_id":   id,
+			"product_type": productType,
+			"old_status":   "archived",
+			"new_status":   "available",
+		},
+	}); aerr != nil {
+		logger.LogError(ctx, aerr, "failed to write audit log for product unarchive", logger.Fields{"product_id": id})
+	}
+
+	return &ArchiveProductResponse{Message: "تم إلغاء أرشفة المنتج بنجاح"}, nil
 }

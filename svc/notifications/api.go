@@ -230,3 +230,4 @@ func (s *Service) GetTemplates(ctx context.Context) (*GetTemplatesResponse, erro
 		Templates: templatesInfo,
 	}, nil
 }
+

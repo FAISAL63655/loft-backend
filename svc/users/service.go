@@ -6,6 +6,7 @@ import (
 
 	"encore.dev/beta/errs"
 	"encore.dev/storage/sqldb"
+	"encore.app/svc/notifications"
 )
 
 // Database instance for the users service
@@ -129,6 +130,28 @@ func (s *Service) ProcessVerificationRequest(ctx context.Context, userID int64, 
 		return nil, err
 	}
 
+	// Notify admins about the new verification/upgrade request (internal + email)
+	// Best-effort: failures here should not fail the main request
+	if admins, aerr := s.repo.ListAdminUsers(ctx); aerr == nil {
+		// Load requester details for payload
+		if requester, uerr := s.repo.GetUserByID(ctx, userID); uerr == nil {
+			for _, admin := range admins {
+				payload := map[string]any{
+					"user_name":  requester.Name,
+					"user_email": requester.Email,
+					"request_id": verificationReq.ID,
+					"note":       req.Note,
+					// For email templates
+					"language": "ar",
+					"name":     admin.Name,
+					"email":    admin.Email,
+				}
+				_, _ = notifications.EnqueueInternal(ctx, admin.ID, "verification_requested_admin", payload)
+				_, _ = notifications.EnqueueEmail(ctx, admin.ID, "verification_requested_admin", payload)
+			}
+		}
+	}
+
 	return &VerificationRequestOutput{
 		Request: VerificationRequest{
 			ID:         verificationReq.ID,
@@ -179,6 +202,20 @@ func (s *Service) ProcessVerificationApproval(ctx context.Context, requestID, ad
 	updatedReq, err := s.repo.GetVerificationRequestByID(ctx, requestID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Notify user (internal inbox + email) about approval
+	if user, uerr := s.repo.GetUserByID(ctx, verificationReq.UserID); uerr == nil {
+		payload := map[string]any{
+			"email":    user.Email,
+			"name":     user.Name,
+			"user_name": user.Name,
+			"language": "ar",
+		}
+		// Internal notification (inbox)
+		_, _ = notifications.EnqueueInternal(ctx, user.ID, "verification_approved", payload)
+		// Email notification
+		_, _ = notifications.EnqueueEmail(ctx, user.ID, "verification_approved", payload)
 	}
 
 	return &ReviewVerificationResponse{

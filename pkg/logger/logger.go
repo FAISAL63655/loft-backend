@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"encore.app/pkg/errs"
 )
 
 // LogLevel represents the logging level
@@ -276,6 +277,18 @@ func LogError(ctx context.Context, err error, message string, fields ...Fields) 
 	}
 
 	errorFields := Fields{"error": err.Error()}
+	if e, ok := err.(*errs.Error); ok {
+		// Include structured error details when available
+		if e.Code != "" {
+			errorFields["code"] = e.Code
+		}
+		if e.CorrelationID != "" {
+			errorFields["correlation_id"] = e.CorrelationID
+		}
+		if e.Details != nil {
+			errorFields["details"] = e.Details
+		}
+	}
 	allFields := append([]Fields{errorFields}, fields...)
 	Error(ctx, message, allFields...)
 }

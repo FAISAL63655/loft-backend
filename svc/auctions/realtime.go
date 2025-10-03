@@ -172,18 +172,7 @@ func HandleSSE(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// HandleWebSocket handles WebSocket connections
-//
-//encore:api public raw method=GET path=/auctions/:id/ws
-func HandleWebSocket(w http.ResponseWriter, req *http.Request) {
-	// v1 does not support WebSocket; use SSE instead.
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":   "not_implemented",
-		"message": "WebSocket is not supported in v1. Please use /auctions/:id/events (SSE).",
-	})
-}
+// NOTE: HandleWebSocket is now implemented in websocket_implementation.go
 
 // BroadcastBidPlaced broadcasts a bid placed event
 func (s *RealtimeService) BroadcastBidPlaced(ctx context.Context, auctionID int64, bid *BidWithDetails, currentPrice float64) error {
@@ -336,12 +325,13 @@ func (h *Hub) run() {
 				case <-client.Done:
 					// Client is already disconnected
 				default:
+					// Get service instance using the hub's reference
+					service := &RealtimeService{hub: h, db: h.db}
 					if client.IsSSE {
-						// Get service instance using the hub's reference
-						service := &RealtimeService{hub: h, db: h.db}
 						service.sendSSEEvent(client, event)
+					} else if client.IsWS {
+						service.sendWSEvent(client, event)
 					}
-					// WebSocket clients not supported in v1
 				}
 			}
 			h.mu.RUnlock()
@@ -357,8 +347,9 @@ func (s *RealtimeService) broadcastToAuction(auctionID int64, event *AuctionEven
 		if client.AuctionID == auctionID {
 			if client.IsSSE {
 				s.sendSSEEvent(client, event)
+			} else if client.IsWS {
+				s.sendWSEvent(client, event)
 			}
-			// WebSocket clients not supported in v1
 		}
 	}
 
@@ -378,8 +369,9 @@ func (s *RealtimeService) broadcastToUsers(auctionID int64, userIDs []int64, eve
 		if client.AuctionID == auctionID && client.UserID != nil && userIDMap[*client.UserID] {
 			if client.IsSSE {
 				s.sendSSEEvent(client, event)
+			} else if client.IsWS {
+				s.sendWSEvent(client, event)
 			}
-			// WebSocket clients not supported in v1
 		}
 	}
 
@@ -407,9 +399,12 @@ func (s *RealtimeService) sendSSEEvent(client *Client, event *AuctionEvent) {
 	client.LastSeen = time.Now().UTC()
 }
 
+// sendWSEvent is implemented in websocket_implementation.go
+
 func (s *RealtimeService) startHeartbeat() {
-	ticker := time.NewTicker(15 * time.Second) // Heartbeat every 15 seconds
-	defer ticker.Stop()
+    // Align with FRD: heartbeat every 30 seconds
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
 
 	for {
 		select {
@@ -440,8 +435,9 @@ func (s *RealtimeService) sendHeartbeat() {
 
 		if client.IsSSE {
 			s.sendSSEEvent(client, event)
+		} else if client.IsWS {
+			s.sendWSEvent(client, event)
 		}
-		// WebSocket clients not supported in v1
 	}
 }
 

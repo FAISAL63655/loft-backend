@@ -255,3 +255,40 @@ func (p Product) IsAvailableForPurchase() bool {
 func (p Product) IsAvailableForAuction() bool {
 	return p.Type == ProductTypePigeon && p.Status == ProductStatusAvailable
 }
+
+// QuestionStatus represents moderation/answering status for Q&A
+type QuestionStatus string
+
+const (
+	QuestionStatusPending  QuestionStatus = "pending"
+	QuestionStatusApproved QuestionStatus = "approved"
+	QuestionStatusRejected QuestionStatus = "rejected"
+)
+
+// ProductQuestion represents a user question on a product
+type ProductQuestion struct {
+	ID          int64          `json:"id" db:"id"`
+	ProductID   int64          `json:"product_id" db:"product_id"`
+	UserID      *int64         `json:"user_id,omitempty" db:"user_id"`
+	Question    string         `json:"question" db:"question"`
+	Answer      *string        `json:"answer,omitempty" db:"answer"`
+	AnsweredBy  *int64         `json:"answered_by,omitempty" db:"answered_by"`
+	Status      QuestionStatus `json:"status" db:"status"`
+	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
+	AnsweredAt  *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
+	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
+}
+
+// AuctionQuestion represents a user question on an auction
+type AuctionQuestion struct {
+	ID          int64          `json:"id" db:"id"`
+	AuctionID   int64          `json:"auction_id" db:"auction_id"`
+	UserID      *int64         `json:"user_id,omitempty" db:"user_id"`
+	Question    string         `json:"question" db:"question"`
+	Answer      *string        `json:"answer,omitempty" db:"answer"`
+	AnsweredBy  *int64         `json:"answered_by,omitempty" db:"answered_by"`
+	Status      QuestionStatus `json:"status" db:"status"`
+	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
+	AnsweredAt  *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
+	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
+}

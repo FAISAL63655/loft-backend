@@ -503,7 +503,7 @@ func (s *ReserveService) sendAuctionEndNotifications(ctx context.Context, auctio
 	}
 
 	basePayload := map[string]interface{}{
-		"auction_id":    auction.ID,
+		"auction_id":    fmt.Sprint(auction.ID),
 		"product_title": productTitle,
 		"outcome":       result.Outcome,
 		"message":       result.Message,
@@ -520,6 +520,14 @@ func (s *ReserveService) sendAuctionEndNotifications(ctx context.Context, auctio
 			}
 			winnerPayload["winning_amount"] = fmt.Sprintf("%.2f", result.WinnerBid.Amount)
 			winnerPayload["is_winner"] = true
+
+			// Lookup winner email/name for email delivery
+			var winnerEmail, winnerName string
+			_ = s.db.QueryRow(ctx, "SELECT email, name FROM users WHERE id = $1", result.WinnerBid.UserID).Scan(&winnerEmail, &winnerName)
+			if winnerEmail != "" {
+				winnerPayload["email"] = winnerEmail
+				if winnerName != "" { winnerPayload["name"] = winnerName }
+			}
 			
 			if _, err := notifications.EnqueueInternal(ctx, result.WinnerBid.UserID, "auction_ended_winner", winnerPayload); err != nil {
 				fmt.Printf("Failed to send winner internal notification: %v\n", err)
@@ -542,6 +550,13 @@ func (s *ReserveService) sendAuctionEndNotifications(ctx context.Context, auctio
 			bidderPayload["highest_bid"] = fmt.Sprintf("%.2f", result.HighestBid.Amount)
 			if result.ReservePrice != nil {
 				bidderPayload["reserve_price"] = fmt.Sprintf("%.2f", *result.ReservePrice)
+			}
+			// Lookup bidder email/name
+			var hbEmail, hbName string
+			_ = s.db.QueryRow(ctx, "SELECT email, name FROM users WHERE id = $1", result.HighestBid.UserID).Scan(&hbEmail, &hbName)
+			if hbEmail != "" {
+				bidderPayload["email"] = hbEmail
+				if hbName != "" { bidderPayload["name"] = hbName }
 			}
 			
 			if _, err := notifications.EnqueueInternal(ctx, result.HighestBid.UserID, "auction_ended_reserve_not_met", bidderPayload); err != nil {
@@ -566,32 +581,41 @@ func (s *ReserveService) sendAuctionEndNotifications(ctx context.Context, auctio
 
 // notifyOtherBidders notifies all bidders except the winner/highest bidder
 func (s *ReserveService) notifyOtherBidders(ctx context.Context, auctionID, excludeUserID int64, basePayload map[string]interface{}) {
-	query := `
-		SELECT DISTINCT user_id 
-		FROM bids 
-		WHERE auction_id = $1 AND user_id != $2`
-	
-	rows, err := s.db.Query(ctx, query, auctionID, excludeUserID)
-	if err != nil {
-		fmt.Printf("Failed to get other bidders: %v\n", err)
-		return
-	}
-	defer rows.Close()
+    query := `
+        SELECT DISTINCT b.user_id, u.email, u.name
+        FROM bids b
+        JOIN users u ON u.id = b.user_id
+        WHERE b.auction_id = $1 AND b.user_id != $2`
+    
+    rows, err := s.db.Query(ctx, query, auctionID, excludeUserID)
+    if err != nil {
+        fmt.Printf("Failed to get other bidders: %v\n", err)
+        return
+    }
+    defer rows.Close()
 
-	for rows.Next() {
-		var userID int64
-		if err := rows.Scan(&userID); err != nil {
-			continue
-		}
+    for rows.Next() {
+        var userID int64
+        var email, name string
+        if err := rows.Scan(&userID, &email, &name); err != nil {
+            continue
+        }
 
-		// Send notification to this bidder
-		if _, err := notifications.EnqueueInternal(ctx, userID, "auction_ended_lost", basePayload); err != nil {
-			fmt.Printf("Failed to send lost internal notification to user %d: %v\n", userID, err)
-		}
-		if _, err := notifications.EnqueueEmail(ctx, userID, "auction_ended_lost", basePayload); err != nil {
-			fmt.Printf("Failed to send lost email notification to user %d: %v\n", userID, err)
-		}
-	}
+        // Clone payload and add recipient email/name
+        payload := make(map[string]interface{})
+        for k, v := range basePayload { payload[k] = v }
+        if email != "" { payload["email"] = email }
+        if name != "" { payload["name"] = name }
+
+        if _, err := notifications.EnqueueInternal(ctx, userID, "auction_ended_lost", payload); err != nil {
+            fmt.Printf("Failed to send lost internal notification to user %d: %v\n", userID, err)
+        }
+        if email != "" {
+            if _, err := notifications.EnqueueEmail(ctx, userID, "auction_ended_lost", payload); err != nil {
+                fmt.Printf("Failed to send lost email notification to user %d: %v\n", userID, err)
+            }
+        }
+    }
 }
 
 // notifyAuctionWatchers notifies users who might be interested in the auction outcome

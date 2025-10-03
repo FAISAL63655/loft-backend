@@ -36,10 +36,7 @@ BEGIN
             END IF;
         END IF;
         
-        -- منع الانتقال المباشر من available إلى sold
-        IF OLD.status = 'available' AND NEW.status = 'sold' THEN
-            RAISE EXCEPTION 'Cannot transition directly from available to sold';
-        END IF;
+        -- السماح بالانتقال المباشر من available إلى sold (يتم التحقق الذري في التطبيق عند الدفع)
     END IF;
     
     -- قواعد خاصة بالمستلزمات
@@ -120,27 +117,7 @@ BEGIN
         UPDATE orders 
         SET status = 'paid' 
         WHERE id = NEW.order_id;
-        
-        -- تحديث حالة المنتجات في الطلب إلى sold
-        UPDATE products 
-        SET status = 'sold' 
-        WHERE id IN (
-            SELECT oi.product_id 
-            FROM order_items oi 
-            WHERE oi.order_id = NEW.order_id
-            AND (SELECT type FROM products WHERE id = oi.product_id) = 'pigeon'
-        );
-        
-        -- تقليل مخزون المستلزمات
-        UPDATE supplies 
-        SET stock_qty = stock_qty - oi.qty
-        FROM order_items oi
-        WHERE supplies.product_id = oi.product_id
-        AND oi.order_id = NEW.order_id
-        AND EXISTS (
-            SELECT 1 FROM products p 
-            WHERE p.id = oi.product_id AND p.type = 'supply'
-        );
+        -- ملاحظة: تحديث المنتجات والمخزون يتم الآن عبر منطق التطبيق الذري بعد نجاح الدفع
     END IF;
     
     -- عند فشل الفاتورة

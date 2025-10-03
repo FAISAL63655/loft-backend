@@ -43,6 +43,17 @@ func TestCreateAuction(t *testing.T) {
 		Email:  "user@example.com",
 	})
 
+	// تأكد من وجود منتج صالح لإنشاء المزاد عليه
+	slug := fmt.Sprintf("test-create-auction-%d", time.Now().UnixNano())
+	var productID int64
+	if err := db.QueryRow(ctx, `INSERT INTO products (type, title, slug, price_net, status) VALUES ('pigeon', 'Test Pigeon', $1, 1000.00, 'available') RETURNING id`, slug).Scan(&productID); err != nil {
+		t.Fatalf("Failed to create product: %v", err)
+	}
+	ring := fmt.Sprintf("CA-%d", time.Now().UnixNano())
+	if _, err := db.Exec(ctx, `INSERT INTO pigeons (product_id, ring_number, sex) VALUES ($1, $2, 'male')`, productID, ring); err != nil {
+		t.Fatalf("Failed to create pigeon: %v", err)
+	}
+
 	reserve1 := 4500.00
 	reserve2 := 2000.00
 
@@ -57,7 +68,7 @@ func TestCreateAuction(t *testing.T) {
 			name: "إنشاء مزاد ناجح - Admin",
 			ctx:  adminCtx,
 			req: &auctionssvc.CreateAuctionRequest{
-				ProductID:    1,
+				ProductID:    productID,
 				StartPrice:   3000.00,
 				BidStep:      100,
 				ReservePrice: &reserve1,
@@ -70,7 +81,7 @@ func TestCreateAuction(t *testing.T) {
 			name: "فشل - مستخدم غير مصرح له",
 			ctx:  userCtx,
 			req: &auctionssvc.CreateAuctionRequest{
-				ProductID:  1,
+				ProductID:  productID,
 				StartPrice: 2500.00,
 				BidStep:    100,
 				StartAt:    time.Now().Add(1 * time.Hour),
@@ -83,7 +94,7 @@ func TestCreateAuction(t *testing.T) {
 			name: "فشل - وقت انتهاء قبل وقت البداية",
 			ctx:  adminCtx,
 			req: &auctionssvc.CreateAuctionRequest{
-				ProductID:  1,
+				ProductID:  productID,
 				StartPrice: 5000.00,
 				BidStep:    100,
 				StartAt:    time.Now().Add(2 * time.Hour),
@@ -96,7 +107,7 @@ func TestCreateAuction(t *testing.T) {
 			name: "فشل - سعر احتياطي أقل من سعر البداية",
 			ctx:  adminCtx,
 			req: &auctionssvc.CreateAuctionRequest{
-				ProductID:    1,
+				ProductID:    productID,
 				StartPrice:   3000.00,
 				BidStep:      100,
 				ReservePrice: &reserve2,
@@ -392,20 +403,20 @@ func cleanupAuctionTestData(t *testing.T, db *sqldb.Database) {
 }
 
 func createTestAdmin(t *testing.T, db *sqldb.Database) int64 {
-	ctx := context.Background()
+    ctx := context.Background()
 
-	// تشفير كلمة المرور
-	hashedPassword, err := authn.HashPassword("AdminPass123!")
-	if err != nil {
-		t.Fatalf("Failed to hash password: %v", err)
-	}
+    // تشفير كلمة المرور
+    hashedPassword, err := authn.HashPassword("AdminPass123!")
+    if err != nil {
+        t.Fatalf("Failed to hash password: %v", err)
+    }
 
-	var adminID int64
-	err = db.QueryRow(ctx, `
-		INSERT INTO users (name, email, password_hash, phone, city_id, role, state, email_verified_at, created_at, updated_at)
-		VALUES ('Admin User', 'test_admin@example.com', $1, '+966501234567', 1, 'admin', 'active', NOW(), NOW(), NOW())
-		RETURNING id
-	`, hashedPassword).Scan(&adminID)
+    var adminID int64
+    err = db.QueryRow(ctx, `
+        INSERT INTO users (name, email, password_hash, phone, city_id, role, state, email_verified_at, created_at, updated_at)
+        VALUES ('Admin User', 'test_admin@example.com', $1, $2, 1, 'admin', 'active', NOW(), NOW(), NOW())
+        RETURNING id
+    `, hashedPassword, uniqueTestPhone()).Scan(&adminID)
 
 	if err != nil {
 		t.Fatalf("Failed to create admin user: %v", err)

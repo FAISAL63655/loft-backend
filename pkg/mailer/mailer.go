@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -42,6 +43,9 @@ func (c *Client) Send(ctx context.Context, m Mail) error {
 	if secrets.SendGridAPIKey == "" {
 		return errors.New("missing SendGridAPIKey secret")
 	}
+	// Log for debugging (remove in production)
+	fmt.Printf("DEBUG: Sending email to %s with subject: %s\n", m.ToEmail, m.Subject)
+	fmt.Printf("DEBUG: Using API key starting with: %s...\n", secrets.SendGridAPIKey[:10])
 	body := map[string]any{
 		"personalizations": []any{
 			map[string]any{
@@ -67,9 +71,19 @@ func (c *Client) Send(ctx context.Context, m Mail) error {
 		return err
 	}
 	defer resp.Body.Close()
+	
+	// Read response body for debugging
+	var respBody []byte
+	if resp.Body != nil {
+		respBody, _ = io.ReadAll(resp.Body)
+	}
+	
 	// SendGrid returns 202 on accepted
 	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("sendgrid error status: %d", resp.StatusCode)
+		fmt.Printf("ERROR: SendGrid API response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
+		return fmt.Errorf("sendgrid error status: %d, body: %s", resp.StatusCode, string(respBody))
 	}
+	fmt.Printf("SUCCESS: Email sent to %s (status: %d)\n", m.ToEmail, resp.StatusCode)
 	return nil
 }
+

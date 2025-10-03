@@ -143,3 +143,23 @@ BEGIN
     RETURN released_count;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ===
+-- Cart items (no-reservation model)
+-- This replaces reservation-based carts by storing items explicitly per user.
+-- Keeping this in the same migration file as requested.
+-- ===
+
+-- جدول عناصر السلة (بدون حجوزات)
+CREATE TABLE IF NOT EXISTS cart_items (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    qty INTEGER NOT NULL DEFAULT 1 CHECK (qty > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, product_id)
+);
+
+-- فهارس لعناصر السلة
+CREATE INDEX IF NOT EXISTS idx_cart_items_user_id ON cart_items(user_id);
+CREATE INDEX IF NOT EXISTS idx_cart_items_created_at ON cart_items(created_at DESC);

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	xdraw "golang.org/x/image/draw" // High-quality scaling
 	"google.golang.org/api/option"
 )
 
@@ -471,20 +472,23 @@ func (c *Client) processImage(ctx context.Context, content []byte, fileName stri
 
 	// Apply watermark if enabled
 	if config.ApplyWatermark {
-		// Use advanced watermark implementation
-		watermarkConfig := WatermarkConfig{
-			Text:       "لوفت الدغيري", // Loft Dughairi in Arabic
+		// Use image-based watermark (logo) implementation
+		// الشعار مفرغ بدون خلفية، في أسفل اليمين
+		watermarkConfig := ImageWatermarkConfig{
+			LogoPath:   "assets/logo.png",
 			Opacity:    config.WatermarkOpacity,
-			Position:   config.WatermarkPosition,
-			FontSize:   16,
-			Color:      color.RGBA{R: 255, G: 255, B: 255, A: 255},
-			Background: true,
+			Position:   "bottom-right", // أسفل اليمين
+			Scale:      0.15,           // 15% من عرض الصورة
+			Background: false,          // بدون خلفية (مفرغ)
 		}
-		
-		watermarkedImg, err := c.ApplyAdvancedWatermark(processedImg, watermarkConfig)
+
+		watermarkedImg, err := c.ApplyImageWatermark(processedImg, watermarkConfig)
 		if err == nil {
 			processedImg = watermarkedImg
 			watermarkApplied = true
+		} else {
+			// Log watermark error but continue with upload
+			fmt.Printf("Warning: Failed to apply watermark: %v\n", err)
 		}
 	}
 
@@ -501,6 +505,7 @@ func (c *Client) processImage(ctx context.Context, content []byte, fileName stri
 		thumbPath, err = c.uploadThumbnail(ctx, thumbImg, fileName, format)
 		if err != nil {
 			// Log error but don't fail the main upload
+			fmt.Printf("Warning: Failed to upload thumbnail: %v\n", err)
 			thumbPath = ""
 		}
 	}
@@ -591,7 +596,7 @@ func (c *Client) applyWatermark(img image.Image, opacity int, position string) (
 	return watermarked, nil
 }
 
-// generateThumbnail creates a thumbnail of the specified width using nearest neighbor scaling
+// generateThumbnail creates a high-quality thumbnail using Catmull-Rom interpolation
 func (c *Client) generateThumbnail(img image.Image, maxWidth int) image.Image {
 	bounds := img.Bounds()
 	originalWidth := bounds.Dx()
@@ -607,29 +612,17 @@ func (c *Client) generateThumbnail(img image.Image, maxWidth int) image.Image {
 	newWidth := maxWidth
 	newHeight := int(math.Round(float64(newWidth) * ratio))
 
+	// Ensure minimum dimensions
+	if newHeight < 1 {
+		newHeight = 1
+	}
+
 	// Create new thumbnail image
 	thumbnail := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 
-	// Perform nearest neighbor scaling
-	for y := 0; y < newHeight; y++ {
-		for x := 0; x < newWidth; x++ {
-			// Map thumbnail coordinates to original image coordinates
-			srcX := int(math.Round(float64(x) * float64(originalWidth) / float64(newWidth)))
-			srcY := int(math.Round(float64(y) * float64(originalHeight) / float64(newHeight)))
-
-			// Ensure coordinates are within bounds
-			if srcX >= originalWidth {
-				srcX = originalWidth - 1
-			}
-			if srcY >= originalHeight {
-				srcY = originalHeight - 1
-			}
-
-			// Copy pixel from original to thumbnail
-			originalColor := img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y)
-			thumbnail.Set(x, y, originalColor)
-		}
-	}
+	// Use high-quality Catmull-Rom interpolation for better results
+	// This is much better than nearest neighbor and produces sharp, clear thumbnails
+	xdraw.CatmullRom.Scale(thumbnail, thumbnail.Bounds(), img, bounds, xdraw.Over, nil)
 
 	return thumbnail
 }
@@ -655,24 +648,29 @@ func (c *Client) uploadThumbnail(ctx context.Context, img image.Image, originalF
 	return thumbPath, nil
 }
 
-// encodeImage encodes an image to bytes
+// encodeImage encodes an image to bytes with optimized compression
 func (c *Client) encodeImage(img image.Image, format string) ([]byte, error) {
 	var buf bytes.Buffer
 
 	switch strings.ToLower(format) {
 	case "jpeg", "jpg":
-		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90})
+		// High quality JPEG (85 is optimal balance between size and quality)
+		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85})
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode as JPEG: %w", err)
 		}
 	case "png":
-		err := png.Encode(&buf, img)
+		// PNG with best compression
+		encoder := png.Encoder{
+			CompressionLevel: png.BestCompression,
+		}
+		err := encoder.Encode(&buf, img)
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode as PNG: %w", err)
 		}
 	default:
 		// Default to JPEG for unsupported formats
-		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90})
+		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85})
 		if err != nil {
 			return nil, fmt.Errorf("failed to encode as JPEG (default): %w", err)
 		}

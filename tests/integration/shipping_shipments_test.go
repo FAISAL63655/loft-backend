@@ -31,14 +31,14 @@ func createAdminAndUserForShipping(t *testing.T) (adminID, userID int64) {
 	ctx := context.Background()
 	if err := testDB.QueryRow(ctx, `
         INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at)
-        VALUES ('Admin Ship',$1,'x','+966511111111',1,'admin','active',NOW(),NOW(),NOW()) RETURNING id
-    `, fmt.Sprintf("ship_admin_%d@example.com", time.Now().UnixNano())).Scan(&adminID); err != nil {
+        VALUES ('Admin Ship',$1,'x',$2,1,'admin','active',NOW(),NOW(),NOW()) RETURNING id
+    `, fmt.Sprintf("ship_admin_%d@example.com", time.Now().UnixNano()), uniqueTestPhone()).Scan(&adminID); err != nil {
 		t.Fatalf("failed to create admin: %v", err)
 	}
 	if err := testDB.QueryRow(ctx, `
         INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at)
-        VALUES ('User Ship',$1,'x','+966522222222',1,'registered','active',NOW(),NOW(),NOW()) RETURNING id
-    `, fmt.Sprintf("ship_user_%d@example.com", time.Now().UnixNano())).Scan(&userID); err != nil {
+        VALUES ('User Ship',$1,'x',$2,1,'registered','active',NOW(),NOW(),NOW()) RETURNING id
+    `, fmt.Sprintf("ship_user_%d@example.com", time.Now().UnixNano()), uniqueTestPhone()).Scan(&userID); err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 	return

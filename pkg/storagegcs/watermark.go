@@ -6,7 +6,18 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"os"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
+
+// ملاحظة: تمت إزالة go:embed لتجنب فشل البناء عند غياب الملف.
+// سنحاول قراءة الخط وقت التشغيل من المسار "assets/fonts/Cairo-Regular.ttf"،
+// وإن لم يتوفر، سنعتمد على basicfont كحل احتياطي.
+var arabicFontBytes []byte
 
 // WatermarkConfig holds configuration for watermarking
 type WatermarkConfig struct {
@@ -15,55 +26,88 @@ type WatermarkConfig struct {
 	Position   string // "center", "top-left", "top-right", "bottom-left", "bottom-right"
 	FontSize   int    // Font size in pixels
 	Color      color.RGBA
-	Background bool   // Add background to text for better visibility
+	Background bool // Add background to text for better visibility
+	// Optional: محاذاة RTL بسيطة (رسم يبدأ من اليمين)
+	RTL bool
 }
 
 // DefaultWatermarkConfig returns default watermark configuration
 func DefaultWatermarkConfig() WatermarkConfig {
 	return WatermarkConfig{
-		Text:       "لوفت الدغيري", // Loft Dughairi in Arabic
-		Opacity:    70,
+		Text:       "Loft Dughairi ", // نص عربي افتراضي (عدّله كما تشاء)
+		Opacity:    100,
 		Position:   "bottom-right",
-		FontSize:   16,
+		FontSize:   62,
 		Color:      color.RGBA{R: 255, G: 255, B: 255, A: 255}, // White
 		Background: true,
+		RTL:        true,
 	}
 }
 
 // ApplyAdvancedWatermark applies an advanced watermark with better text rendering
 func (c *Client) ApplyAdvancedWatermark(img image.Image, config WatermarkConfig) (image.Image, error) {
-	bounds := img.Bounds()
-	watermarked := image.NewRGBA(bounds)
-
-	// Copy original image to new image
-	draw.Draw(watermarked, bounds, img, bounds.Min, draw.Src)
-
-	// Calculate watermark dimensions based on text length and font size
-	textWidth := len([]rune(config.Text)) * config.FontSize * 3 / 4 // Approximate character width
-	textHeight := config.FontSize
-
-	// Add padding for background
-	paddingX := config.FontSize / 4
-	paddingY := config.FontSize / 6
-	watermarkWidth := textWidth + (paddingX * 2)
-	watermarkHeight := textHeight + (paddingY * 2)
-
-	// Calculate position
-	imgWidth := bounds.Dx()
-	imgHeight := bounds.Dy()
-	startX, startY := c.calculateWatermarkPosition(
-		imgWidth, imgHeight,
-		watermarkWidth, watermarkHeight,
-		config.Position,
-	)
-
-	// Create watermark with background if enabled
-	if config.Background {
-		c.drawWatermarkBackground(watermarked, startX, startY, watermarkWidth, watermarkHeight, config.Opacity)
+	if config.Opacity < 0 {
+		config.Opacity = 0
+	}
+	if config.Opacity > 100 {
+		config.Opacity = 100
+	}
+	if config.FontSize <= 0 {
+		config.FontSize = 24
 	}
 
-	// Draw text watermark
-	c.drawTextWatermark(watermarked, config.Text, startX+paddingX, startY+paddingY, config)
+	// إنشاء نسخة قابلة للرسم
+	bounds := img.Bounds()
+	watermarked := image.NewRGBA(bounds)
+	draw.Draw(watermarked, bounds, img, bounds.Min, draw.Src)
+
+	// تهيئة الخط
+	face, ascent, textW, textH, err := prepareFaceAndMeasure(config)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closer, ok := face.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}()
+
+	// مساحة الكرت (النص + الحشوات)
+	paddingX := int(float64(config.FontSize) * 0.25)
+	paddingY := int(float64(config.FontSize) * 0.20)
+	watermarkW := textW + (paddingX * 2)
+	watermarkH := textH + (paddingY * 2)
+
+	// حساب موضع البداية (كرت الخلفية)
+	imgW := bounds.Dx()
+	imgH := bounds.Dy()
+	startX, startY := c.calculateWatermarkPosition(
+		imgW, imgH, watermarkW, watermarkH, config.Position,
+	)
+
+	// خلفية نصف شفافة اختياريًا
+	if config.Background {
+		c.drawWatermarkBackground(watermarked, startX, startY, watermarkW, watermarkH, config.Opacity)
+	}
+
+	// رسم النص داخل الكرت
+	innerX := startX + paddingX
+	innerY := startY + paddingY
+
+	if err := drawTextWithFont(
+		watermarked,
+		config.Text,
+		innerX,
+		innerY,
+		ascent,
+		textW,
+		face,
+		config.Color,
+		config.Opacity,
+		config.RTL,
+	); err != nil {
+		return nil, err
+	}
 
 	return watermarked, nil
 }
@@ -91,141 +135,21 @@ func (c *Client) calculateWatermarkPosition(imgWidth, imgHeight, watermarkWidth,
 
 // drawWatermarkBackground draws a semi-transparent background for the watermark
 func (c *Client) drawWatermarkBackground(img *image.RGBA, x, y, width, height, opacity int) {
-	// Background color (dark semi-transparent)
-	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: uint8(opacity * 128 / 100)} // Darker background
+	// خلفية غامقة نصف شفافة
+	bgAlpha := uint8((opacity * 128) / 100) // ضبط الشفافية
+	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: bgAlpha}
+
+	// تأكد من حدود الصورة
+	maxX := img.Bounds().Dx()
+	maxY := img.Bounds().Dy()
 
 	for dy := 0; dy < height; dy++ {
 		for dx := 0; dx < width; dx++ {
 			px := x + dx
 			py := y + dy
-
-			if px >= 0 && py >= 0 && px < img.Bounds().Dx() && py < img.Bounds().Dy() {
-				// Blend background with existing pixel
+			if px >= 0 && py >= 0 && px < maxX && py < maxY {
 				existing := img.RGBAAt(px, py)
 				blended := c.blendColors(existing, bgColor)
-				img.Set(px, py, blended)
-			}
-		}
-	}
-}
-
-// drawTextWatermark draws the text watermark using a simple bitmap font approach
-func (c *Client) drawTextWatermark(img *image.RGBA, text string, x, y int, config WatermarkConfig) {
-	// Convert opacity to alpha
-	alpha := uint8(config.Opacity * 255 / 100)
-	textColor := color.RGBA{
-		R: config.Color.R,
-		G: config.Color.G,
-		B: config.Color.B,
-		A: alpha,
-	}
-
-	// Simple character rendering - each character is rendered as a rectangular pattern
-	charWidth := config.FontSize * 3 / 4
-	charHeight := config.FontSize
-
-	runes := []rune(text)
-	for i, r := range runes {
-		charX := x + (i * charWidth)
-		charY := y
-
-		// Render character using simple patterns
-		c.renderCharacter(img, r, charX, charY, charWidth, charHeight, textColor)
-	}
-}
-
-// renderCharacter renders a single character using simple geometric patterns
-func (c *Client) renderCharacter(img *image.RGBA, char rune, x, y, width, height int, color color.RGBA) {
-	// For Arabic characters, use geometric approximations
-	// This is a simplified implementation - a full implementation would use proper font rendering
-	
-	switch char {
-	case 'ل': // Arabic Lam
-		c.drawVerticalLine(img, x+width/4, y, height, color)
-		c.drawHorizontalLine(img, x, y+height-2, width/2, color)
-	case 'و': // Arabic Waw
-		c.drawCircle(img, x+width/2, y+height/2, width/4, color)
-	case 'ف': // Arabic Fa
-		c.drawCircle(img, x+width/2, y+height/3, width/6, color)
-		c.drawHorizontalLine(img, x, y+height*2/3, width, color)
-	case 'ت': // Arabic Ta
-		c.drawHorizontalLine(img, x, y+height/2, width, color)
-		c.drawDot(img, x+width/4, y+height/4, color)
-		c.drawDot(img, x+width*3/4, y+height/4, color)
-	case 'ا': // Arabic Alif
-		c.drawVerticalLine(img, x+width/2, y, height, color)
-	case 'د': // Arabic Dal
-		c.drawHorizontalLine(img, x, y+height-2, width, color)
-		c.drawVerticalLine(img, x+width-2, y+height/2, height/2, color)
-	case 'غ': // Arabic Ghain
-		c.drawCircle(img, x+width/2, y+height/2, width/3, color)
-		c.drawDot(img, x+width/2, y+height/4, color)
-	case 'ي': // Arabic Ya
-		c.drawHorizontalLine(img, x, y+height-2, width, color)
-		c.drawDot(img, x+width/3, y+height*3/4, color)
-		c.drawDot(img, x+width*2/3, y+height*3/4, color)
-	case 'ر': // Arabic Ra
-		c.drawHorizontalLine(img, x, y+height-2, width/2, color)
-		c.drawVerticalLine(img, x+width/2, y+height/2, height/2, color)
-	case 'ح': // Arabic Ha
-		c.drawHorizontalLine(img, x, y+height/2, width, color)
-		c.drawVerticalLine(img, x, y+height/2, height/2, color)
-		c.drawVerticalLine(img, x+width-2, y+height/2, height/2, color)
-	default:
-		// For unknown characters or Latin, draw a simple rectangle
-		c.drawRectangle(img, x, y, width, height, color)
-	}
-}
-
-// Helper drawing functions
-func (c *Client) drawVerticalLine(img *image.RGBA, x, y, length int, color color.RGBA) {
-	for i := 0; i < length && y+i < img.Bounds().Dy(); i++ {
-		if x >= 0 && x < img.Bounds().Dx() && y+i >= 0 {
-			existing := img.RGBAAt(x, y+i)
-			blended := c.blendColors(existing, color)
-			img.Set(x, y+i, blended)
-		}
-	}
-}
-
-func (c *Client) drawHorizontalLine(img *image.RGBA, x, y, length int, color color.RGBA) {
-	for i := 0; i < length && x+i < img.Bounds().Dx(); i++ {
-		if x+i >= 0 && y >= 0 && y < img.Bounds().Dy() {
-			existing := img.RGBAAt(x+i, y)
-			blended := c.blendColors(existing, color)
-			img.Set(x+i, y, blended)
-		}
-	}
-}
-
-func (c *Client) drawCircle(img *image.RGBA, centerX, centerY, radius int, color color.RGBA) {
-	for y := -radius; y <= radius; y++ {
-		for x := -radius; x <= radius; x++ {
-			if x*x+y*y <= radius*radius {
-				px := centerX + x
-				py := centerY + y
-				if px >= 0 && py >= 0 && px < img.Bounds().Dx() && py < img.Bounds().Dy() {
-					existing := img.RGBAAt(px, py)
-					blended := c.blendColors(existing, color)
-					img.Set(px, py, blended)
-				}
-			}
-		}
-	}
-}
-
-func (c *Client) drawDot(img *image.RGBA, x, y int, color color.RGBA) {
-	c.drawCircle(img, x, y, 2, color)
-}
-
-func (c *Client) drawRectangle(img *image.RGBA, x, y, width, height int, color color.RGBA) {
-	for dy := 0; dy < height; dy++ {
-		for dx := 0; dx < width; dx++ {
-			px := x + dx
-			py := y + dy
-			if px >= 0 && py >= 0 && px < img.Bounds().Dx() && py < img.Bounds().Dy() {
-				existing := img.RGBAAt(px, py)
-				blended := c.blendColors(existing, color)
 				img.Set(px, py, blended)
 			}
 		}
@@ -243,4 +167,107 @@ func (c *Client) blendColors(existing, overlay color.RGBA) color.RGBA {
 		B: uint8(float64(existing.B)*invAlpha + float64(overlay.B)*alpha),
 		A: existing.A,
 	}
+}
+
+// ---------------------------
+// أدوات الخط والرسم بالنص
+// ---------------------------
+
+func prepareFaceAndMeasure(cfg WatermarkConfig) (face font.Face, ascent, textW, textH int, err error) {
+	// محاولة تحميل الخط من الملف إذا لم يكن مضمنًا
+	if len(arabicFontBytes) == 0 {
+		// Try Cairo font first (better Arabic support)
+		if b, readErr := os.ReadFile("assets/fonts/Cairo-Regular.ttf"); readErr == nil {
+			arabicFontBytes = b
+		} else if b, readErr := os.ReadFile("assets/fonts/Tajawal-Regular.ttf"); readErr == nil {
+			// Fallback to Tajawal if Cairo not found
+			arabicFontBytes = b
+		}
+	}
+
+	if len(arabicFontBytes) > 0 {
+		ft, pErr := opentype.Parse(arabicFontBytes)
+		if pErr != nil {
+			// في حال فشل التحليل لأي سبب، نستخدم basicfont
+			face = basicfont.Face7x13
+		} else {
+			var nErr error
+			face, nErr = opentype.NewFace(ft, &opentype.FaceOptions{
+				Size:    float64(cfg.FontSize),
+				DPI:     96,
+				Hinting: font.HintingFull,
+			})
+			if nErr != nil {
+				// fallback
+				face = basicfont.Face7x13
+			}
+		}
+	} else {
+		// fallback: basicfont عند عدم توفر ملف الخط
+		face = basicfont.Face7x13
+	}
+
+	textW, textH, ascent = measure(face, cfg.Text)
+	return face, ascent, textW, textH, nil
+}
+
+// يقيس عرض/ارتفاع النص الحقيقي بالـ font
+func measure(face font.Face, s string) (w, h, ascent int) {
+	b, _ := font.BoundString(face, s)
+	w = (b.Max.X - b.Min.X).Ceil()
+	m := face.Metrics()
+	ascent = m.Ascent.Ceil()
+	descent := m.Descent.Ceil()
+	h = ascent + descent
+	return
+}
+
+// helper: يطبق الشفافية على اللون
+func colorWithOpacity(c color.RGBA, opacity int) *image.Uniform {
+	if opacity < 0 {
+		opacity = 0
+	}
+	if opacity > 100 {
+		opacity = 100
+	}
+	a := uint8((int(c.A) * opacity) / 100)
+	return image.NewUniform(color.RGBA{R: c.R, G: c.G, B: c.B, A: a})
+}
+
+// drawTextWithFont يرسم النص العربي باستخدام خط TTF
+// ملاحظة: هذا لا يقوم بتشكيل (shaping) معقّد للحروف العربية.
+// عمليًا يعطي نتيجة ممتازة لمعظم النصوص. لو تحتاج ligatures/ربط مثالي استخدم
+// محرك تشكيل مثل go-text/typesetting لاحقًا.
+func drawTextWithFont(
+	dst *image.RGBA,
+	txt string,
+	x, y int, // أعلى-يسار منطقة النص داخل الكرت
+	ascent int,
+	textW int,
+	face font.Face,
+	col color.RGBA,
+	opacity int,
+	rtl bool,
+) error {
+	d := &font.Drawer{
+		Dst:  dst,
+		Src:  colorWithOpacity(col, opacity),
+		Face: face,
+	}
+
+	// baseline: نضع Y على أساس خط الأساس
+	d.Dot.Y = fixed.I(y + ascent)
+
+	// لو RTL: نحاذي النص لليمين داخل الصندوق (نبدأ القلم من نهاية السطر)
+	if rtl {
+		d.Dot.X = fixed.I(x + textW)
+		// DrawString يرسم من الموضع الحالي إلى اليمين، لكن بما أننا
+		// زدنا X بعرض النص، النتيجة تكون محاذاة لليمين.
+	} else {
+		// LTR: نبدأ من x مباشرة
+		d.Dot.X = fixed.I(x)
+	}
+
+	d.DrawString(txt)
+	return nil
 }

@@ -20,6 +20,94 @@ func NewRepository() *Repository {
 	return &Repository{}
 }
 
+// PhoneVerificationSession represents a phone verification session record
+type PhoneVerificationSession struct {
+	ID                int64
+	Phone             string
+	Code              string
+	ExpiresAt         time.Time
+	VerifiedAt        *time.Time
+	VerificationToken *string
+	TokenExpiresAt    *time.Time
+	ConsumedAt        *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// StartPhoneVerification creates a new phone verification session with the given code and expiry
+func (r *Repository) StartPhoneVerification(ctx context.Context, phone, code string, expiresAt time.Time) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO phone_verification_sessions (phone, code, expires_at)
+		VALUES ($1, $2, $3)
+	`, phone, code, expiresAt)
+	return err
+}
+
+// GetPhoneVerificationByPhoneAndCode retrieves the latest verification session by phone and code
+func (r *Repository) GetPhoneVerificationByPhoneAndCode(ctx context.Context, phone, code string) (*PhoneVerificationSession, error) {
+	var rec PhoneVerificationSession
+	err := db.QueryRow(ctx, `
+		SELECT id, phone, code, expires_at, verified_at, verification_token, token_expires_at, consumed_at, created_at, updated_at
+		FROM phone_verification_sessions
+		WHERE phone = $1 AND code = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, phone, code).Scan(
+		&rec.ID, &rec.Phone, &rec.Code, &rec.ExpiresAt, &rec.VerifiedAt, &rec.VerificationToken, &rec.TokenExpiresAt, &rec.ConsumedAt, &rec.CreatedAt, &rec.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// MarkPhoneVerifiedAndSetToken marks the session as verified and sets a verification token with expiry
+func (r *Repository) MarkPhoneVerifiedAndSetToken(ctx context.Context, id int64, token string, tokenExpiresAt time.Time) error {
+	_, err := db.Exec(ctx, `
+		UPDATE phone_verification_sessions
+		SET verified_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), verification_token = $2, token_expires_at = $3, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE id = $1
+	`, id, token, tokenExpiresAt)
+	return err
+}
+
+// GetPhoneVerificationByToken retrieves a verification session by token
+func (r *Repository) GetPhoneVerificationByToken(ctx context.Context, token string) (*PhoneVerificationSession, error) {
+	var rec PhoneVerificationSession
+	err := db.QueryRow(ctx, `
+		SELECT id, phone, code, expires_at, verified_at, verification_token, token_expires_at, consumed_at, created_at, updated_at
+		FROM phone_verification_sessions
+		WHERE verification_token = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, token).Scan(
+		&rec.ID, &rec.Phone, &rec.Code, &rec.ExpiresAt, &rec.VerifiedAt, &rec.VerificationToken, &rec.TokenExpiresAt, &rec.ConsumedAt, &rec.CreatedAt, &rec.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &rec, nil
+}
+
+// ConsumePhoneVerificationToken marks the verification token as consumed to prevent reuse
+func (r *Repository) ConsumePhoneVerificationToken(ctx context.Context, token string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE phone_verification_sessions
+		SET consumed_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE verification_token = $1 AND consumed_at IS NULL
+	`, token)
+	return err
+}
+
+// UserPhoneExists checks if a phone is already used by any user
+func (r *Repository) UserPhoneExists(ctx context.Context, phone string) (bool, error) {
+	var exists bool
+	err := db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM users WHERE phone = $1)
+	`, phone).Scan(&exists)
+	return exists, err
+}
+
 // CityExists checks if a city exists and is enabled
 func (r *Repository) CityExists(ctx context.Context, cityID int64) (bool, error) {
 	var exists bool

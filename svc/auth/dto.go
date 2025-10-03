@@ -4,12 +4,15 @@ package auth
 import "time"
 
 // RegisterRequest represents the user registration request
+// Phone is no longer provided here; it must be verified beforehand via /auth/phone/start and /auth/phone/verify
 type RegisterRequest struct {
-	Name     string `json:"name" validate:"required"`
-	Email    string `json:"email" validate:"required,email"`
-	Phone    string `json:"phone" validate:"required"` // إجباري
-	CityID   int64  `json:"city_id" validate:"required,min=1"`
-	Password string `json:"password" validate:"required,min=8"`
+	Name                  string `json:"name" validate:"required"`
+	Email                 string `json:"email" validate:"required,email"`
+	CityID                int64  `json:"city_id" validate:"required,min=1"`
+	Password              string `json:"password" validate:"required,min=8"`
+	PhoneVerificationToken string `json:"phone_verification_token" validate:"required"`
+	// Deprecated: Phone is no longer accepted in the registration flow. Use /auth/phone/start and /auth/phone/verify.
+	Phone string `json:"phone,omitempty" validate:"-"`
 }
 
 // RegisterResponse represents the user registration response
@@ -54,6 +57,29 @@ type VerifyEmailRequest struct {
 type VerifyEmailResponse struct {
 	Message string `json:"message"`
 	Success bool   `json:"success"`
+}
+
+// StartPhoneRequest starts phone verification by generating an OTP
+type StartPhoneRequest struct {
+	Phone string `json:"phone" validate:"required"`
+}
+
+type StartPhoneResponse struct {
+	Message string `json:"message"`
+	Success bool   `json:"success"`
+}
+
+// VerifyPhoneRequest verifies the OTP and returns a short-lived token to be used during registration
+type VerifyPhoneRequest struct {
+	Phone string `json:"phone" validate:"required"`
+	Code  string `json:"code" validate:"required,len=4"`
+}
+
+type VerifyPhoneResponse struct {
+	PhoneVerificationToken string    `json:"phone_verification_token"`
+	ExpiresAt              time.Time `json:"expires_at"`
+	Success                bool      `json:"success"`
+	Message                string    `json:"message"`
 }
 
 // RefreshTokenRequest represents the token refresh request

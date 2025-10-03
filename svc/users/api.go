@@ -8,19 +8,27 @@ import (
 
 	"encore.app/pkg/errs"
 	"encore.app/pkg/ratelimit"
+	authsvc "encore.app/svc/auth"
 	"encore.dev/beta/auth"
 )
 
 // isAdmin checks if the authenticated user has admin role
 func isAdmin() bool {
 	if d := auth.Data(); d != nil {
-		// Case 1: map[string]any
+		// Case 1: explicit AuthData from auth service
+		switch v := d.(type) {
+		case *authsvc.AuthData:
+			return v.Role == "admin"
+		case authsvc.AuthData:
+			return v.Role == "admin"
+		}
+		// Case 2: map[string]any (fallback)
 		if m, ok := d.(map[string]interface{}); ok {
 			if role, ok := m["role"].(string); ok {
 				return role == "admin"
 			}
 		}
-		// Case 2: struct with Role field
+		// Case 3: any type exposing GetRole (legacy)
 		if v, ok := d.(interface{ GetRole() string }); ok {
 			return v.GetRole() == "admin"
 		}

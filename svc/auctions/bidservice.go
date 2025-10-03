@@ -102,10 +102,59 @@ func (s *BidService) PlaceBid(ctx context.Context, auctionID int64, userID int64
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
+	// Determine current price and outbid users
+	currentPrice = createdBid.Amount
+	outbidUsers, err := s.repo.GetOutbidUsers(ctx, auctionID, createdBid.Amount, userID)
+	if err == nil && len(outbidUsers) > 0 {
+		// Enqueue internal notifications for outbid users so they appear in inbox regardless of realtime
+		var productTitle string
+		if err := s.db.QueryRow(ctx, "SELECT title FROM products WHERE id = $1", auction.ProductID).Scan(&productTitle); err != nil {
+			productTitle = fmt.Sprintf("المزاد #%d", auctionID)
+		}
+		for _, uid := range outbidUsers {
+			// Get user details for email
+			var userEmail, userName string
+			var userBidAmount float64
+			if err := s.db.QueryRow(ctx, `
+				SELECT u.email, u.name, b.amount
+				FROM users u
+				LEFT JOIN bids b ON b.user_id = u.id AND b.auction_id = $1
+				WHERE u.id = $2
+				ORDER BY b.amount DESC
+				LIMIT 1
+			`, auctionID, uid).Scan(&userEmail, &userName, &userBidAmount); err != nil {
+				fmt.Printf("Failed to get user details for outbid notification: %v\n", err)
+				continue
+			}
+
+			// Prepare payload for both internal and email notifications
+			payload := map[string]interface{}{
+				"auction_id":    fmt.Sprint(auctionID),
+				"product_title": productTitle,
+				"new_price":     fmt.Sprintf("%.2f", currentPrice),
+				"your_bid":      fmt.Sprintf("%.2f", userBidAmount),
+				"language":      "ar",
+				"email":         userEmail,
+				"name":          userName,
+				"Name":          userName, // For template compatibility
+				"AuctionURL":    fmt.Sprintf("https://dughairiloft.com/auctions/%d", auctionID),
+			}
+			
+			// Send internal notification
+			if _, err := notifications.EnqueueInternal(ctx, uid, "bid_outbid", payload); err != nil {
+				fmt.Printf("Failed to send outbid internal notification to user %d: %v\n", uid, err)
+			}
+			
+			// Send email notification
+			if _, err := notifications.EnqueueEmail(ctx, uid, "bid_outbid", payload); err != nil {
+				fmt.Printf("Failed to send outbid email notification to user %d: %v\n", uid, err)
+			}
+		}
+	}
+
 	// Broadcast bid_placed event
 	realtimeService := GetRealtimeService()
 	if realtimeService != nil {
-		currentPrice := createdBid.Amount
 		// Convert Bid to BidWithDetails for broadcasting
 		bidWithDetails := &BidWithDetails{
 			Bid: *createdBid,
@@ -116,9 +165,8 @@ func (s *BidService) PlaceBid(ctx context.Context, auctionID int64, userID int64
 			fmt.Printf("Failed to broadcast bid_placed event: %v\n", err)
 		}
 
-		// Send outbid notifications to previous bidders
-		outbidUsers, err := s.repo.GetOutbidUsers(ctx, auctionID, createdBid.Amount, userID)
-		if err == nil && len(outbidUsers) > 0 {
+		// Send outbid realtime events to previous bidders (if any)
+		if len(outbidUsers) > 0 {
 			if err := realtimeService.BroadcastOutbid(ctx, auctionID, outbidUsers, currentPrice); err != nil {
 				fmt.Printf("Failed to broadcast outbid event: %v\n", err)
 			}
@@ -275,7 +323,7 @@ func (s *BidService) sendBidRemovedNotification(ctx context.Context, bid *Bid, a
 
 	payload := map[string]interface{}{
 		"bidder_name":   bid.BidderNameSnapshot,
-		"auction_id":    auction.ID,
+		"auction_id":    fmt.Sprint(auction.ID),
 		"product_title": productTitle,
 		"bid_amount":    fmt.Sprintf("%.2f", bid.Amount),
 		"reason":        reason,

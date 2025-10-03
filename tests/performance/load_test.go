@@ -3,6 +3,7 @@ package performance
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -373,35 +374,53 @@ func TestAPIResponseTime(t *testing.T) {
 // Helper types and functions
 
 type testUser struct {
-	ID    int64
-	Email string
+    ID    int64
+    Email string
+}
+
+var perfPhoneCounter int64
+var perfSlugCounter int64
+
+func uniquePerfPhone() string {
+	// Combine time, atomic counter and randomness to avoid collisions under parallel load
+	rand.Seed(time.Now().UnixNano())
+	n := time.Now().UnixNano()
+	c := atomic.AddInt64(&perfPhoneCounter, 1)
+	r := int64(rand.Intn(1_000_000))
+	v := (n + c + r) % 100_000_000
+	if v < 0 {
+		v = -v
+	}
+	return fmt.Sprintf("+9665%08d", v)
 }
 
 func cleanupPerformanceTestData(t *testing.T, db *sqldb.Database) {
-	ctx := context.Background()
-	queries := []string{
-		"DELETE FROM bids WHERE auction_id IN (SELECT id FROM auctions)",
-		"DELETE FROM auctions",
-		"DELETE FROM pigeons WHERE product_id IN (SELECT id FROM products WHERE title LIKE 'Performance Test%')",
-		"DELETE FROM products WHERE title LIKE 'Performance Test%'",
-		"DELETE FROM users WHERE email LIKE 'perf_%@example.com' OR email LIKE 'admin_%@example.com'",
-	}
-
-	for _, query := range queries {
-		if _, err := db.Exec(ctx, query); err != nil {
-			t.Logf("Warning: cleanup query failed: %v", err)
-		}
-	}
+    ctx := context.Background()
+    queries := []string{
+        "DELETE FROM bids WHERE auction_id IN (SELECT id FROM auctions)",
+        "DELETE FROM auctions",
+        "DELETE FROM pigeons WHERE product_id IN (SELECT id FROM products WHERE title LIKE 'Performance Test%')",
+        "DELETE FROM products WHERE title LIKE 'Performance Test%'",
+        "DELETE FROM users WHERE email LIKE 'perf_%@example.com' OR email LIKE 'admin_%@example.com'",
+    }
+    for _, q := range queries {
+        if _, err := db.Exec(ctx, q); err != nil {
+            t.Logf("cleanup warning: %v", err)
+        }
+    }
 }
 
 func mustCreateProductPigeon(t *testing.T, db *sqldb.Database) int64 {
-	ctx := context.Background()
-	slug := fmt.Sprintf("perf-pigeon-%d", time.Now().UnixNano())
-	var productID int64
-	if err := db.QueryRow(ctx, `INSERT INTO products (type, title, slug, price_net, status) VALUES ('pigeon', 'Performance Test Pigeon', $1, 1000.00, 'available') RETURNING id`, slug).Scan(&productID); err != nil {
-		t.Fatalf("Failed to create product: %v", err)
-	}
-	ring := fmt.Sprintf("PR-%d", time.Now().UnixNano())
+    ctx := context.Background()
+    // Strongly unique slug for high-concurrency runs
+    rand.Seed(time.Now().UnixNano())
+    c := atomic.AddInt64(&perfSlugCounter, 1)
+    slug := fmt.Sprintf("perf-pigeon-%d-%d-%06d", time.Now().UnixNano(), c, rand.Intn(1_000_000))
+    var productID int64
+    if err := db.QueryRow(ctx, `INSERT INTO products (type, title, slug, price_net, status) VALUES ('pigeon', 'Performance Test Pigeon', $1, 1000.00, 'available') RETURNING id`, slug).Scan(&productID); err != nil {
+        t.Fatalf("Failed to create product: %v", err)
+    }
+    ring := fmt.Sprintf("PR-%d", time.Now().UnixNano())
 	if _, err := db.Exec(ctx, `INSERT INTO pigeons (product_id, ring_number, sex) VALUES ($1, $2, 'male')`, productID, ring); err != nil {
 		t.Fatalf("Failed to create pigeon: %v", err)
 	}
@@ -445,7 +464,7 @@ func createVerifiedUser(t *testing.T, db *sqldb.Database, email string) int64 {
 		) VALUES (
 			$1, $2, $3, $4, $5, 'verified', 'active', NOW(), NOW(), NOW()
 		) RETURNING id
-	`, "Perf User", email, hashedPassword, "+966501234567", 1).Scan(&userID)
+	`, "Perf User", email, hashedPassword, uniquePerfPhone(), 1).Scan(&userID)
 
 	if err != nil {
 		t.Fatalf("Failed to create verified user: %v", err)
@@ -470,7 +489,7 @@ func createAdminUser(t *testing.T, db *sqldb.Database, email string) int64 {
 		) VALUES (
 			$1, $2, $3, $4, $5, 'admin', 'active', NOW(), NOW(), NOW()
 		) RETURNING id
-	`, "Admin User", email, hashedPassword, "+966501234567", 1).Scan(&userID)
+	`, "Admin User", email, hashedPassword, uniquePerfPhone(), 1).Scan(&userID)
 
 	if err != nil {
 		t.Fatalf("Failed to create admin user: %v", err)

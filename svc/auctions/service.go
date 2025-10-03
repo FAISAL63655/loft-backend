@@ -350,17 +350,32 @@ func (s *Service) MarkWinnerUnpaid(ctx context.Context, auctionID int64) error {
 
 	return nil
 }
-
-// TickAuctions starts and closes auctions based on time (invoked by cron)
 //
 //encore:api private
 func TickAuctions(ctx context.Context) error {
-	s := GetService()
+    s := GetService()
+    fmt.Printf("[AUCTION_TICK] Tick started at %s\n", time.Now().UTC().Format(time.RFC3339))
+
+    // Prevent overlapping ticks using a Postgres advisory lock
+    // This helps avoid "Step is still running" and ensures only one tick runs at a time.
+    var got bool
+    if err := s.db.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", int64(424242)).Scan(&got); err != nil {
+        fmt.Printf("[AUCTION_TICK] failed to acquire advisory lock: %v\n", err)
+        return err
+    }
+    if !got {
+        fmt.Printf("[AUCTION_TICK] skipped: another tick is running\n")
+        return nil
+    }
+    defer func() {
+        _, _ = s.db.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(424242))
+    }()
 
 	// Close ended auctions
-	toClose, err := s.repo.GetAuctionsToClose(ctx)
-	if err == nil {
-		for _, a := range toClose {
+	    toClose, err := s.repo.GetAuctionsToClose(ctx)
+    if err == nil {
+        fmt.Printf("[AUCTION_TICK] toClose=%d\n", len(toClose))
+        for _, a := range toClose {
 			// Re-fetch details to get current price and reserve
 			det, derr := s.repo.GetAuctionWithDetails(ctx, a.ID)
 			if derr != nil {
@@ -379,16 +394,54 @@ func TickAuctions(ctx context.Context) error {
 				_ = s.repo.UpdateAuctionStatus(ctx, tx, a.ID, AuctionStatusEnded)
 				_ = s.updateProductStatusTx(ctx, tx, det.ProductID, "auction_hold")
 				_ = tx.Commit()
+				fmt.Printf("[AUCTION_TICK] Closed auction %d with winner\n", a.ID)
 				// Lookup winner user id (last highest bid)
 				var winnerUserID int64
 				_ = s.db.QueryRow(ctx, `SELECT user_id FROM bids WHERE auction_id=$1 ORDER BY amount DESC, created_at DESC LIMIT 1`, det.ID).Scan(&winnerUserID)
 				if winnerUserID != 0 {
-					_, _ = order_mgmt.CreateAuctionWinnerOrder(ctx, &order_mgmt.CreateAuctionWinnerParams{
+					orderResp, orderErr := order_mgmt.CreateAuctionWinnerOrder(ctx, &order_mgmt.CreateAuctionWinnerParams{
 						AuctionID:          det.ID,
 						ProductID:          det.ProductID,
 						WinnerUserID:       winnerUserID,
 						WinningAmountGross: det.CurrentPrice,
 					})
+
+					// Send notifications to winner (internal + email)
+					var productTitle string
+					_ = s.db.QueryRow(ctx, `SELECT title FROM products WHERE id=$1`, det.ProductID).Scan(&productTitle)
+					if productTitle == "" { productTitle = fmt.Sprintf("المزاد #%d", det.ID) }
+					var email, name string
+					_ = s.db.QueryRow(ctx, `SELECT email, name FROM users WHERE id=$1`, winnerUserID).Scan(&email, &name)
+					
+					// Get invoice number
+					var invoiceNumber string
+					if orderErr == nil && orderResp != nil {
+						_ = s.db.QueryRow(ctx, `SELECT number FROM invoices WHERE id=$1`, orderResp.InvoiceID).Scan(&invoiceNumber)
+					}
+					
+					payload := map[string]interface{}{
+						"auction_id":     fmt.Sprint(det.ID),
+						"product_title":  productTitle,
+						"outcome":        "winner",
+						"message":        "انتهى المزاد بفوزك - يرجى الدفع خلال 48 ساعة",
+						"winning_amount": fmt.Sprintf("%.2f", det.CurrentPrice),
+						"is_winner":      true,
+						"language":       "ar",
+					}
+					if orderErr == nil && orderResp != nil {
+						payload["order_id"] = fmt.Sprint(orderResp.OrderID)
+						payload["invoice_id"] = fmt.Sprint(orderResp.InvoiceID)
+						payload["invoice_number"] = invoiceNumber
+						payload["payment_url"] = fmt.Sprintf("https://dughairiloft.com/checkout/%d", orderResp.OrderID)
+					}
+					if email != "" { 
+						payload["email"] = email 
+						payload["name"] = name
+						payload["Name"] = name // For template compatibility
+					}
+					if name != "" { payload["name"] = name }
+					_, _ = notifications.EnqueueInternal(ctx, winnerUserID, "auction_ended_winner", payload)
+					if email != "" { _, _ = notifications.EnqueueEmail(ctx, winnerUserID, "auction_ended_winner", payload) }
 				}
 			} else {
 				// No winner: end auction (not cancelled) and return product to available
@@ -403,6 +456,7 @@ func TickAuctions(ctx context.Context) error {
 				_ = s.repo.UpdateAuctionStatus(ctx, tx, a.ID, AuctionStatusEnded)
 				_ = s.updateProductStatusTx(ctx, tx, det.ProductID, "available")
 				_ = tx.Commit()
+				fmt.Printf("[AUCTION_TICK] Closed auction %d without winner (%s)\n", a.ID, reason)
 				// Audit end without winner
 				s.sendAuditNotification(ctx, "AUC.ENDED_NO_WINNER", a.ID, map[string]interface{}{
 					"product_id":  det.ProductID,
@@ -410,15 +464,59 @@ func TickAuctions(ctx context.Context) error {
 					"reserve_met": reserveOk,
 					"bids_count":  det.BidsCount,
 				})
+
+				// If there were bids but reserve not met, notify highest bidder
+				if winnerExists && !reserveOk {
+					var hbUserID int64
+					var hbAmount float64
+					_ = s.db.QueryRow(ctx, `SELECT user_id, amount FROM bids WHERE auction_id=$1 ORDER BY amount DESC, created_at DESC LIMIT 1`, det.ID).Scan(&hbUserID, &hbAmount)
+					if hbUserID != 0 {
+						var productTitle string
+						_ = s.db.QueryRow(ctx, `SELECT title FROM products WHERE id=$1`, det.ProductID).Scan(&productTitle)
+						if productTitle == "" { productTitle = fmt.Sprintf("المزاد #%d", det.ID) }
+						var email, name string
+						_ = s.db.QueryRow(ctx, `SELECT email, name FROM users WHERE id=$1`, hbUserID).Scan(&email, &name)
+						payload := map[string]interface{}{
+							"auction_id":    fmt.Sprint(det.ID),
+							"product_title": productTitle,
+							"outcome":       "reserve_not_met",
+							"message":       "لم يتحقق سعر الاحتياطي",
+							"highest_bid":   fmt.Sprintf("%.2f", hbAmount),
+							"language":      "ar",
+						}
+						if email != "" { payload["email"] = email }
+						if name != "" { payload["name"] = name }
+						_, _ = notifications.EnqueueInternal(ctx, hbUserID, "auction_ended_reserve_not_met", payload)
+						if email != "" { _, _ = notifications.EnqueueEmail(ctx, hbUserID, "auction_ended_reserve_not_met", payload) }
+					}
+				}
 			}
 		}
 	}
 
-	// Start scheduled auctions (status flips handled elsewhere)
-	toStart, err := s.repo.GetAuctionsToStart(ctx)
-	if err == nil {
-		for range toStart {
-			// No-op here; system will mark them live as they pass start_at
+	// Start scheduled auctions whose start_at has passed
+	    toStart, err := s.repo.GetAuctionsToStart(ctx)
+    if err == nil {
+        fmt.Printf("[AUCTION_TICK] toStart=%d\n", len(toStart))
+        for _, a := range toStart {
+			// Flip to live and mark product in_auction atomically
+			tx, txerr := s.db.Begin(ctx)
+			if txerr != nil {
+				continue
+			}
+			// Update auction status
+			_ = s.repo.UpdateAuctionStatus(ctx, tx, a.ID, AuctionStatusLive)
+			// Update product status
+			_ = s.updateProductStatusTx(ctx, tx, a.ProductID, "in_auction")
+			_ = tx.Commit()
+			fmt.Printf("[AUCTION_TICK] Started auction %d (product %d)\n", a.ID, a.ProductID)
+
+			// Audit start event (best-effort)
+			s.sendAuditNotification(ctx, "AUC.STARTED", a.ID, map[string]interface{}{
+				"product_id": a.ProductID,
+				"start_at":   a.StartAt,
+				"end_at":     a.EndAt,
+			})
 		}
 	}
 
@@ -556,7 +654,7 @@ func (s *Service) sendAuctionCancellationNotifications(ctx context.Context, auct
 	}
 
 	basePayload := map[string]interface{}{
-		"auction_id":    auction.ID,
+		"auction_id":    fmt.Sprint(auction.ID),
 		"product_title": productTitle,
 		"reason":        reason,
 		"message":       "تم إلغاء المزاد",
@@ -615,7 +713,7 @@ func (s *Service) sendWinnerUnpaidNotification(ctx context.Context, auction *Auc
 	}
 
 	payload := map[string]interface{}{
-		"auction_id":     auction.ID,
+		"auction_id":     fmt.Sprint(auction.ID),
 		"product_title":  productTitle,
 		"winning_amount": fmt.Sprintf("%.2f", winningAmount),
 		"winner_name":    winnerName,
@@ -645,7 +743,7 @@ func (s *Service) sendAdminAuditNotification(ctx context.Context, eventType stri
 
 	payload := map[string]interface{}{
 		"event_type":  eventType,
-		"auction_id":  auctionID,
+		"auction_id":  fmt.Sprint(auctionID),
 		"details":     details,
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),
 		"language":    "ar",

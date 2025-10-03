@@ -31,6 +31,40 @@ type SupplyCartItem struct {
 	ExpiresAt     string  `json:"expires_at"` // ISO8601
 }
 
+// عنصر سلة محلي للحمام (من العميل)
+type LocalPigeonItem struct {
+	ProductID int64 `json:"product_id"`
+}
+
+// عنصر سلة محلي للمستلزمات (من العميل)
+type LocalSupplyItem struct {
+	ProductID int64 `json:"product_id"`
+	Qty       int   `json:"qty"`
+}
+
+// طلب دمج السلة المحلية مع سلة السيرفر
+type MergeCartRequest struct {
+	LocalPigeons  []LocalPigeonItem `json:"local_pigeons"`
+	LocalSupplies []LocalSupplyItem `json:"local_supplies"`
+}
+
+// استجابة دمج السلة
+type MergeCartResponse struct {
+	CartResponse
+	MergeResults struct {
+		SuccessfulPigeons  []int64 `json:"successful_pigeons"`
+		SuccessfulSupplies []int64 `json:"successful_supplies"`
+		FailedPigeons      []struct {
+			ProductID int64  `json:"product_id"`
+			Reason    string `json:"reason"`
+		} `json:"failed_pigeons"`
+		FailedSupplies []struct {
+			ProductID int64  `json:"product_id"`
+			Reason    string `json:"reason"`
+		} `json:"failed_supplies"`
+	} `json:"merge_results"`
+}
+
 // الاستجابة العامة للسلة
 type CartResponse struct {
 	Pigeons  []PigeonCartItem `json:"pigeons"`

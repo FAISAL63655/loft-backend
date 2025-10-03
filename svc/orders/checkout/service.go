@@ -12,7 +12,6 @@ import (
 
 	"encore.app/pkg/config"
 	"encore.app/pkg/errs"
-	"encore.app/pkg/moneysar"
 )
 
 var db = sqldb.Named("coredb")
@@ -76,6 +75,11 @@ func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error
 		vatRate = s.VATRate
 	}
 
+	// Defensive: ensure DB connection is healthy before starting a transaction
+	if err := db.Stdlib().PingContext(ctx); err != nil {
+		return nil, &errs.Error{Code: errs.ServiceUnavailable, Message: "تعذر الاتصال بقاعدة البيانات، حاول لاحقاً"}
+	}
+
 	// Begin transaction
 	tx, err := db.Stdlib().BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
@@ -87,80 +91,63 @@ func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error
 		}
 	}()
 
-	// Guard: ORD_PIGEON_ALREADY_PENDING only for same pigeon currently reserved by user
-	var conflict bool
-	_ = tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-		  SELECT 1
-		  FROM order_items oi
-		  JOIN orders o ON o.id = oi.order_id
-		  WHERE o.user_id = $1
-		    AND o.status = 'pending_payment'
-		    AND oi.product_id IN (
-		      SELECT id FROM products
-		      WHERE type = 'pigeon'
-		        AND reserved_by = $1
-		        AND status IN ('reserved','payment_in_progress')
-		    )
-		)
-	`, userID).Scan(&conflict)
-	if conflict {
-		return nil, &errs.Error{Code: "ORD_PIGEON_ALREADY_PENDING", Message: "لديك طلب حمامة قيد الدفع"}
-	}
-
 	// Create order
 	var orderID int64
 	if err = tx.QueryRowContext(ctx, `INSERT INTO orders (user_id, source) VALUES ($1,'direct') RETURNING id`, userID).Scan(&orderID); err != nil {
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الطلب"}
 	}
 
-	// Build items from current holds
-	// Pigeons
-	pRows, err := tx.QueryContext(ctx, `
-		SELECT p.id, p.price_net
-		FROM products p
-		WHERE p.type='pigeon' AND p.status='reserved' AND p.reserved_by=$1 AND p.reserved_expires_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-	`, userID)
-	if err != nil {
-		return nil, &errs.Error{Code: errs.Internal, Message: "فشل قراءة عناصر الحمام"}
+	// Build items from cart_items
+	// Validate availability first
+	var badPigeon sql.NullInt64
+	_ = tx.QueryRowContext(ctx, `
+		SELECT p.id
+		FROM cart_items ci
+		JOIN products p ON p.id=ci.product_id
+		WHERE ci.user_id=$1 AND p.type='pigeon' AND p.status!='available'
+		LIMIT 1
+	`, userID).Scan(&badPigeon)
+	if badPigeon.Valid {
+		return nil, &errs.Error{Code: errs.Conflict, Message: "العنصر لم يعد متاح"}
 	}
-	for pRows.Next() {
-		var pid int64
-		var priceNet float64
-		if err = pRows.Scan(&pid, &priceNet); err != nil {
-			return nil, &errs.Error{Code: errs.Internal, Message: "خطأ قراءة الحمام"}
-		}
-		unitGross := moneysar.GrossFromNet(priceNet, vatRate)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO order_items (order_id, product_id, qty, unit_price_gross, line_total_gross) VALUES ($1,$2,1,$3,$3)`, orderID, pid, unitGross); err != nil {
-			return nil, &errs.Error{Code: errs.Internal, Message: "فشل إدراج عنصر الحمام"}
-		}
+	var badSupply sql.NullInt64
+	_ = tx.QueryRowContext(ctx, `
+		SELECT p.id
+		FROM cart_items ci
+		JOIN products p ON p.id=ci.product_id
+		JOIN supplies s ON s.product_id=p.id
+		WHERE ci.user_id=$1 AND p.type='supply' AND (ci.qty <= 0 OR s.stock_qty < ci.qty)
+		LIMIT 1
+	`, userID).Scan(&badSupply)
+	if badSupply.Valid {
+		return nil, &errs.Error{Code: errs.Conflict, Message: "العنصر لم يعد متاح"}
 	}
-	_ = pRows.Close()
 
-	// Supplies
-	sRows, err := tx.QueryContext(ctx, `
-		SELECT sr.product_id, p.price_net, sr.qty
-		FROM stock_reservations sr
-		JOIN products p ON p.id=sr.product_id
-		WHERE sr.user_id=$1 AND (sr.expires_at > (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') OR sr.invoice_id IS NOT NULL)
-	`, userID)
-	if err != nil {
-		return nil, &errs.Error{Code: errs.Internal, Message: "فشل قراءة المستلزمات"}
+	// Insert pigeons (bulk)
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO order_items (order_id, product_id, qty, unit_price_gross, line_total_gross)
+		SELECT $1 AS order_id, p.id AS product_id, 1 AS qty,
+			   ROUND(p.price_net * (1 + $2::numeric), 2) AS unit_price_gross,
+			   ROUND(p.price_net * (1 + $2::numeric), 2) AS line_total_gross
+		FROM cart_items ci
+		JOIN products p ON p.id=ci.product_id
+		WHERE ci.user_id=$3 AND p.type='pigeon'
+	`, orderID, vatRate, userID); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إدراج عناصر الحمام: " + err.Error()}
 	}
-	for sRows.Next() {
-		var pid int64
-		var priceNet float64
-		var qty int
-		if err = sRows.Scan(&pid, &priceNet, &qty); err != nil {
-			return nil, &errs.Error{Code: errs.Internal, Message: "خطأ قراءة المستلزمات"}
-		}
-		unitGross := moneysar.GrossFromNet(priceNet, vatRate)
-		lineGross := unitGross * float64(qty)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO order_items (order_id, product_id, qty, unit_price_gross, line_total_gross) VALUES ($1,$2,$3,$4,$5)`, orderID, pid, qty, unitGross, lineGross); err != nil {
-			return nil, &errs.Error{Code: errs.Internal, Message: "فشل إدراج عنصر مستلزم"}
-		}
+
+	// Insert supplies (bulk)
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO order_items (order_id, product_id, qty, unit_price_gross, line_total_gross)
+		SELECT $1 AS order_id, p.id AS product_id, ci.qty AS qty,
+			   ROUND(p.price_net * (1 + $2::numeric), 2) AS unit_price_gross,
+			   ROUND(p.price_net * (1 + $2::numeric), 2) * ci.qty AS line_total_gross
+		FROM cart_items ci
+		JOIN products p ON p.id=ci.product_id
+		WHERE ci.user_id=$3 AND p.type='supply' AND ci.qty > 0
+	`, orderID, vatRate, userID); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إدراج عناصر المستلزمات: " + err.Error()}
 	}
-	_ = sRows.Close()
 
 	// Recalculate totals via trigger by touching row
 	if _, err = tx.ExecContext(ctx, `UPDATE orders SET updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, orderID); err != nil {
@@ -171,11 +158,11 @@ func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error
 	year := time.Now().UTC().Year()
 	var invoiceNumber string
 	if err = tx.QueryRowContext(ctx, `SELECT next_invoice_number($1)`, year).Scan(&invoiceNumber); err != nil {
-		return nil, &errs.Error{Code: errs.Internal, Message: "فشل ترقيم الفاتورة"}
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل ترقيم الفاتورة: " + err.Error()}
 	}
 	var invoiceID int64
-	if err = tx.QueryRowContext(ctx, `INSERT INTO invoices (order_id, number, vat_rate_snapshot, totals) VALUES ($1,$2,$3, jsonb_build_object('idem_key',$4)) RETURNING id`, orderID, invoiceNumber, vatRate, key).Scan(&invoiceID); err != nil {
-		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الفاتورة"}
+	if err = tx.QueryRowContext(ctx, `INSERT INTO invoices (order_id, number, vat_rate_snapshot, totals) VALUES ($1,$2,$3, jsonb_build_object('idem_key', $4::text)) RETURNING id`, orderID, invoiceNumber, vatRate, key).Scan(&invoiceID); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الفاتورة: " + err.Error()}
 	}
 
 	if err = tx.Commit(); err != nil {

@@ -14,6 +14,224 @@ type Repository struct {
 	db *sqldb.Database
 }
 
+// ========================= Q&A Repository =========================
+
+// CreateProductQuestion inserts a new question for a product
+func (r *Repository) CreateProductQuestion(ctx context.Context, productID int64, userID *int64, question string) (*ProductQuestion, error) {
+    query := `
+        INSERT INTO product_questions (product_id, user_id, question, status)
+        VALUES ($1, $2, $3, 'pending')
+        RETURNING id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+    `
+    var q ProductQuestion
+    err := r.db.QueryRow(ctx, query, productID, userID, question).Scan(
+        &q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to create product question: %w", err)
+    }
+    return &q, nil
+}
+
+// ListProductQuestionsPublic lists approved questions for a product
+func (r *Repository) ListProductQuestionsPublic(ctx context.Context, productID int64) ([]ProductQuestion, error) {
+    rows, err := r.db.Query(ctx, `
+        SELECT id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+        FROM product_questions
+        WHERE product_id = $1 AND status = 'approved'
+        ORDER BY created_at ASC
+    `, productID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to list product questions: %w", err)
+    }
+    defer rows.Close()
+    var out []ProductQuestion
+    for rows.Next() {
+        var q ProductQuestion
+        if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan product question: %w", err)
+        }
+        out = append(out, q)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iter product questions: %w", err)
+    }
+    return out, nil
+}
+
+// ListProductQuestionsAdmin lists questions for a product with optional status filter
+func (r *Repository) ListProductQuestionsAdmin(ctx context.Context, productID *int64, status *QuestionStatus) ([]ProductQuestion, error) {
+    sb := strings.Builder{}
+    sb.WriteString(`SELECT id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM product_questions`)
+    args := []interface{}{}
+    where := []string{}
+    if productID != nil {
+        where = append(where, fmt.Sprintf("product_id = $%d", len(args)+1))
+        args = append(args, *productID)
+    }
+    if status != nil {
+        where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
+        args = append(args, *status)
+    }
+    if len(where) > 0 {
+        sb.WriteString(" WHERE ")
+        sb.WriteString(strings.Join(where, " AND "))
+    }
+    sb.WriteString(" ORDER BY created_at DESC")
+    rows, err := r.db.Query(ctx, sb.String(), args...)
+    if err != nil {
+        return nil, fmt.Errorf("failed to list product questions (admin): %w", err)
+    }
+    defer rows.Close()
+    var out []ProductQuestion
+    for rows.Next() {
+        var q ProductQuestion
+        if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan product question: %w", err)
+        }
+        out = append(out, q)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iter product questions: %w", err)
+    }
+    return out, nil
+}
+
+// AnswerProductQuestion sets the answer and approves the question
+func (r *Repository) AnswerProductQuestion(ctx context.Context, qid int64, answer string, answeredBy int64) (*ProductQuestion, error) {
+    query := `
+        UPDATE product_questions
+        SET answer = $2, answered_by = $3, answered_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), status = 'approved', updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        WHERE id = $1
+        RETURNING id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+    `
+    var q ProductQuestion
+    err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
+    if err != nil {
+        return nil, fmt.Errorf("failed to answer product question: %w", err)
+    }
+    return &q, nil
+}
+
+// SetProductQuestionStatus updates the status (pending/approved/rejected)
+func (r *Repository) SetProductQuestionStatus(ctx context.Context, qid int64, status QuestionStatus) error {
+    _, err := r.db.Exec(ctx, `
+        UPDATE product_questions SET status = $2, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $1
+    `, qid, status)
+    if err != nil {
+        return fmt.Errorf("failed to set product question status: %w", err)
+    }
+    return nil
+}
+
+// CreateAuctionQuestion inserts a new question for an auction
+func (r *Repository) CreateAuctionQuestion(ctx context.Context, auctionID int64, userID *int64, question string) (*AuctionQuestion, error) {
+    query := `
+        INSERT INTO auction_questions (auction_id, user_id, question, status)
+        VALUES ($1, $2, $3, 'pending')
+        RETURNING id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+    `
+    var q AuctionQuestion
+    err := r.db.QueryRow(ctx, query, auctionID, userID, question).Scan(
+        &q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to create auction question: %w", err)
+    }
+    return &q, nil
+}
+
+// ListAuctionQuestionsPublic lists approved questions for an auction
+func (r *Repository) ListAuctionQuestionsPublic(ctx context.Context, auctionID int64) ([]AuctionQuestion, error) {
+    rows, err := r.db.Query(ctx, `
+        SELECT id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+        FROM auction_questions
+        WHERE auction_id = $1 AND status = 'approved'
+        ORDER BY created_at ASC
+    `, auctionID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to list auction questions: %w", err)
+    }
+    defer rows.Close()
+    var out []AuctionQuestion
+    for rows.Next() {
+        var q AuctionQuestion
+        if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan auction question: %w", err)
+        }
+        out = append(out, q)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iter auction questions: %w", err)
+    }
+    return out, nil
+}
+
+// ListAuctionQuestionsAdmin lists questions with optional status filter
+func (r *Repository) ListAuctionQuestionsAdmin(ctx context.Context, auctionID *int64, status *QuestionStatus) ([]AuctionQuestion, error) {
+    sb := strings.Builder{}
+    sb.WriteString(`SELECT id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM auction_questions`)
+    args := []interface{}{}
+    where := []string{}
+    if auctionID != nil {
+        where = append(where, fmt.Sprintf("auction_id = $%d", len(args)+1))
+        args = append(args, *auctionID)
+    }
+    if status != nil {
+        where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
+        args = append(args, *status)
+    }
+    if len(where) > 0 {
+        sb.WriteString(" WHERE ")
+        sb.WriteString(strings.Join(where, " AND "))
+    }
+    sb.WriteString(" ORDER BY created_at DESC")
+    rows, err := r.db.Query(ctx, sb.String(), args...)
+    if err != nil {
+        return nil, fmt.Errorf("failed to list auction questions (admin): %w", err)
+    }
+    defer rows.Close()
+    var out []AuctionQuestion
+    for rows.Next() {
+        var q AuctionQuestion
+        if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan auction question: %w", err)
+        }
+        out = append(out, q)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("iter auction questions: %w", err)
+    }
+    return out, nil
+}
+
+// AnswerAuctionQuestion sets the answer and approves the question
+func (r *Repository) AnswerAuctionQuestion(ctx context.Context, qid int64, answer string, answeredBy int64) (*AuctionQuestion, error) {
+    query := `
+        UPDATE auction_questions
+        SET answer = $2, answered_by = $3, answered_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), status = 'approved', updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+        WHERE id = $1
+        RETURNING id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
+    `
+    var q AuctionQuestion
+    err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
+    if err != nil {
+        return nil, fmt.Errorf("failed to answer auction question: %w", err)
+    }
+    return &q, nil
+}
+
+// SetAuctionQuestionStatus updates the status (pending/approved/rejected)
+func (r *Repository) SetAuctionQuestionStatus(ctx context.Context, qid int64, status QuestionStatus) error {
+    _, err := r.db.Exec(ctx, `
+        UPDATE auction_questions SET status = $2, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $1
+    `, qid, status)
+    if err != nil {
+        return fmt.Errorf("failed to set auction question status: %w", err)
+    }
+    return nil
+}
+
 // NewRepository creates a new catalog repository
 func NewRepository(db *sqldb.Database) *Repository {
 	return &Repository{db: db}
@@ -211,19 +429,43 @@ func (r *Repository) UpdateProduct(ctx context.Context, product *Product) error 
 		UPDATE products 
 		SET title = $2, description = $3, price_net = $4, status = $5, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE id = $1
-		RETURNING updated_at
 	`
+	
+	_, err := r.db.Exec(ctx, query, 
+		product.ID,
+		product.Title,
+		product.Description,
+		product.PriceNet,
+		product.Status,
+	)
+	
+	return err
+}
 
-	err := r.db.QueryRow(ctx, query,
-		product.ID, product.Title, product.Description,
-		product.PriceNet, product.Status,
-	).Scan(&product.UpdatedAt)
-
-	if err != nil {
-		return fmt.Errorf("failed to update product: %w", err)
+// UpdateProductPartial updates specific fields of a product using a map
+func (r *Repository) UpdateProductPartial(ctx context.Context, productID int64, updates map[string]interface{}) error {
+	if len(updates) == 0 {
+		return nil
 	}
 
-	return nil
+	setParts := []string{}
+	args := []interface{}{productID}
+	argIndex := 2
+
+	for field, value := range updates {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", field, argIndex))
+		args = append(args, value)
+		argIndex++
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE products 
+		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE id = $1
+	`, strings.Join(setParts, ", "))
+	
+	_, err := r.db.Exec(ctx, query, args...)
+	return err
 }
 
 // GetPigeonByProductID retrieves pigeon details for a product
@@ -473,4 +715,69 @@ func (r *Repository) CheckRingNumberExists(ctx context.Context, ringNumber strin
 	}
 
 	return count > 0, nil
+}
+
+// CheckRingNumberExistsExcluding checks if a ring number exists excluding a specific product
+func (r *Repository) CheckRingNumberExistsExcluding(ctx context.Context, ringNumber string, excludeProductID int64) (bool, error) {
+	query := `SELECT COUNT(*) FROM pigeons WHERE ring_number = $1 AND product_id != $2`
+
+	var count int
+	err := r.db.QueryRow(ctx, query, ringNumber, excludeProductID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to check ring number existence: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// UpdatePigeon updates pigeon details using a map of fields
+func (r *Repository) UpdatePigeon(ctx context.Context, productID int64, updates map[string]interface{}) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	setParts := []string{}
+	args := []interface{}{productID}
+	argIndex := 2
+
+	for field, value := range updates {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", field, argIndex))
+		args = append(args, value)
+		argIndex++
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE pigeons 
+		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE product_id = $1
+	`, strings.Join(setParts, ", "))
+	
+	_, err := r.db.Exec(ctx, query, args...)
+	return err
+}
+
+// UpdateSupply updates supply details using a map of fields
+func (r *Repository) UpdateSupply(ctx context.Context, productID int64, updates map[string]interface{}) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	setParts := []string{}
+	args := []interface{}{productID}
+	argIndex := 2
+
+	for field, value := range updates {
+		setParts = append(setParts, fmt.Sprintf("%s = $%d", field, argIndex))
+		args = append(args, value)
+		argIndex++
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE supplies 
+		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE product_id = $1
+	`, strings.Join(setParts, ", "))
+	
+	_, err := r.db.Exec(ctx, query, args...)
+	return err
 }

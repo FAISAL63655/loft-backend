@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"time"
 
 	"encore.app/pkg/errs"
@@ -152,8 +153,11 @@ type ProductSummary struct {
 	CreatedAt   time.Time     `json:"created_at"`
 
 	// Type-specific summary info
-	RingNumber *string `json:"ring_number,omitempty"` // For pigeons
-	StockQty   *int    `json:"stock_qty,omitempty"`   // For supplies
+	RingNumber *string    `json:"ring_number,omitempty"` // For pigeons
+	Sex        *PigeonSex `json:"sex,omitempty"`         // For pigeons
+	BirthDate  *time.Time `json:"birth_date,omitempty"`  // For pigeons
+	Lineage    *string    `json:"lineage,omitempty"`     // For pigeons
+	StockQty   *int       `json:"stock_qty,omitempty"`   // For supplies
 
 	// Media info
 	ThumbnailURL *string `json:"thumbnail_url,omitempty"`
@@ -248,6 +252,55 @@ type CreateProductResponse struct {
 	Product ProductWithDetails `json:"product"`
 }
 
+// UpdateProductRequest represents a request to update an existing product
+type UpdateProductRequest struct {
+	Title       *string     `json:"title,omitempty"`
+	Description **string    `json:"description,omitempty"` // Double pointer to allow setting to null
+	PriceNet    *float64    `json:"price_net,omitempty"`
+	Status      *ProductStatus `json:"status,omitempty"`
+
+	// Pigeon-specific fields
+	RingNumber         *string    `json:"ring_number,omitempty"`
+	Sex                *PigeonSex `json:"sex,omitempty"`
+	BirthDate          *time.Time `json:"birth_date,omitempty"`
+	Lineage            *string    `json:"lineage,omitempty"`
+	OriginProofURL     *string    `json:"origin_proof_url,omitempty"`
+	OriginProofFileRef *string    `json:"origin_proof_file_ref,omitempty"`
+
+	// Supply-specific fields
+	SKU               *string `json:"sku,omitempty"`
+	StockQty          *int    `json:"stock_qty,omitempty"`
+	LowStockThreshold *int    `json:"low_stock_threshold,omitempty"`
+}
+
+// Validate validates the update product request
+func (req *UpdateProductRequest) Validate() error {
+	if req.PriceNet != nil && *req.PriceNet < 0 {
+		return errs.New(errs.InvalidArgument, "price_net يجب ألا يكون سالبًا")
+	}
+
+	if req.StockQty != nil && *req.StockQty < 0 {
+		return errs.New(errs.InvalidArgument, "stock_qty يجب ألا يكون سالبًا")
+	}
+
+	if req.LowStockThreshold != nil && *req.LowStockThreshold <= 0 {
+		return errs.New(errs.InvalidArgument, "low_stock_threshold يجب أن يكون موجبًا")
+	}
+
+	return nil
+}
+
+// UpdateProductResponse represents the response after updating a product
+type UpdateProductResponse struct {
+	Product ProductWithDetails `json:"product"`
+}
+
+// DeleteProductResponse represents the response after deleting a product
+type DeleteProductResponse struct {
+	Message string `json:"message"`
+	ID      string `json:"id"`
+}
+
 // UploadMediaRequest represents a request to upload media for a product
 type UploadMediaRequest struct {
 	ProductID int64 `json:"id"`
@@ -290,7 +343,8 @@ func DefaultMediaUploadConfig() MediaUploadConfig {
 		MaxFileSizeDoc:   10 * 1024 * 1024,  // 10MB
 		AllowedImageExt:  []string{".jpg", ".jpeg", ".png", ".webp"},
 		AllowedVideoExt:  []string{".mp4"},
-		AllowedDocExt:    []string{".pdf"},
+		// Allow common document types: PDF and spreadsheets
+		AllowedDocExt:    []string{".pdf", ".xlsx", ".xls", ".csv"},
 	}
 }
 
@@ -306,4 +360,61 @@ type ErrorResponse struct {
 type HealthCheckResponse struct {
 	Status    string    `json:"status"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// ========================= Q&A DTOs =========================
+
+// CreateQuestionRequest represents a request to create a new question
+type CreateQuestionRequest struct {
+	Question string `json:"question"`
+}
+
+// Validate validates CreateQuestionRequest
+func (r *CreateQuestionRequest) Validate() error {
+	if len(strings.TrimSpace(r.Question)) < 3 {
+		return errs.New(errs.InvalidArgument, "السؤال قصير جدًا (٣ أحرف على الأقل)")
+	}
+	if len(r.Question) > 2000 {
+		return errs.New(errs.InvalidArgument, "السؤال طويل جدًا")
+	}
+	return nil
+}
+
+// AnswerQuestionRequest represents an admin answer to a question
+type AnswerQuestionRequest struct {
+	Answer string `json:"answer"`
+}
+
+func (r *AnswerQuestionRequest) Validate() error {
+	if len(strings.TrimSpace(r.Answer)) < 2 {
+		return errs.New(errs.InvalidArgument, "الإجابة قصيرة جدًا")
+	}
+	return nil
+}
+
+// SetQuestionStatusRequest represents a moderation status update
+type SetQuestionStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// ListQuestionsAdminRequest represents filters for admin listing
+type ListQuestionsAdminRequest struct {
+	ProductID int64  `query:"product_id"`
+	AuctionID int64  `query:"auction_id"`
+	StatusStr string `query:"status"` // pending/approved/rejected
+}
+
+// ProductQuestionsResponse wraps product questions
+type ProductQuestionsResponse struct {
+	Items []ProductQuestion `json:"items"`
+}
+
+// AuctionQuestionsResponse wraps auction questions
+type AuctionQuestionsResponse struct {
+	Items []AuctionQuestion `json:"items"`
+}
+
+// MessageResponse is a simple message wrapper
+type MessageResponse struct {
+	Message string `json:"message"`
 }

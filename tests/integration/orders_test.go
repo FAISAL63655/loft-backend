@@ -230,13 +230,13 @@ func createPaymentForInvoice(t *testing.T, db *sqldb.Database, invoiceID int64, 
 }
 
 func createOrdersAdminWithEmail(t *testing.T, db *sqldb.Database, email string) int64 {
-	ctx := context.Background()
-	hash, _ := authn.HashPassword("AdminPass123!")
-	var id int64
-	if err := db.QueryRow(ctx, `INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at) VALUES ('Admin',$1,$2,'+966501234567',1,'admin','active',NOW(),NOW(),NOW()) RETURNING id`, email, hash).Scan(&id); err != nil {
-		t.Fatalf("failed to create admin: %v", err)
-	}
-	return id
+    ctx := context.Background()
+    hash, _ := authn.HashPassword("AdminPass123!")
+    var id int64
+    if err := db.QueryRow(ctx, `INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at) VALUES ('Admin',$1,$2,$3,1,'admin','active',NOW(),NOW(),NOW()) RETURNING id`, email, hash, uniqueTestPhone()).Scan(&id); err != nil {
+        t.Fatalf("failed to create admin: %v", err)
+    }
+    return id
 }
 
 func createOrdersAdmin(t *testing.T, db *sqldb.Database) int64 {
@@ -244,19 +244,19 @@ func createOrdersAdmin(t *testing.T, db *sqldb.Database) int64 {
 }
 
 func createOrdersUser(t *testing.T, db *sqldb.Database, email, password string, verified bool) int64 {
-	ctx := context.Background()
-	hash, _ := authn.HashPassword(password)
-	var id int64
-	var verifiedAt interface{}
-	role := "registered"
-	if verified {
-		verifiedAt = time.Now()
-		role = "verified"
-	} else {
-		verifiedAt = nil
-	}
-	if err := db.QueryRow(ctx, `INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at) VALUES ('Test User',$1,$2,'+966501234567',1,$3,'active',$4,NOW(),NOW()) RETURNING id`, email, hash, role, verifiedAt).Scan(&id); err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	return id
+    ctx := context.Background()
+    hash, _ := authn.HashPassword(password)
+    var id int64
+    var verifiedAt interface{}
+    role := "registered"
+    if verified {
+        verifiedAt = time.Now()
+        role = "verified"
+    } else {
+        verifiedAt = nil
+    }
+    if err := db.QueryRow(ctx, `INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at) VALUES ('Test User',$1,$2,$3,1,$4,'active',$5,NOW(),NOW()) RETURNING id`, email, hash, uniqueTestPhone(), role, verifiedAt).Scan(&id); err != nil {
+        t.Fatalf("failed to create user: %v", err)
+    }
+    return id
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,79 @@ type Service struct {
 	slugifier *slugify.Slugifier
 	storage   *storagegcs.Client
 	config    *config.ConfigManager
+}
+
+// parseProductID parses a product ID string to int64
+func parseProductID(id string) (int64, error) {
+	return strconv.ParseInt(id, 10, 64)
+}
+
+// CreateExternalMedia creates a media entry for an external link (e.g., YouTube or general link)
+func (s *Service) CreateExternalMedia(
+    ctx context.Context,
+    productID int64,
+    linkURL string,
+    kind string,
+    thumbPath *string,
+    fileSize *int64,
+    mimeType *string,
+    originalFilename *string,
+) (*UploadMediaResponse, error) {
+    // Basic validation
+    if !strings.HasPrefix(linkURL, "http://") && !strings.HasPrefix(linkURL, "https://") {
+        return nil, errs.E(ctx, "CAT_MEDIA_LINK_INVALID", "رابط غير صالح")
+    }
+
+    // Ensure product exists
+    product, err := s.repo.GetProductByID(ctx, productID)
+    if err != nil {
+        return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل التحقق من وجود المنتج")
+    }
+    if product == nil {
+        return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+    }
+
+    // Map provided kind to media kind
+    mk := MediaKindFile
+    switch strings.ToLower(kind) {
+    case "youtube", "video":
+        mk = MediaKindVideo
+    case "image":
+        mk = MediaKindImage
+    default:
+        mk = MediaKindFile
+    }
+
+    // Create media record pointing to the external URL directly in GCSPath field
+    media := &Media{
+        ProductID:        productID,
+        Kind:             mk,
+        GCSPath:          linkURL,
+        ThumbPath:        nil,
+        WatermarkApplied: false,
+        FileSize:         nil,
+        MimeType:         nil,
+        OriginalFilename: nil,
+    }
+
+    if thumbPath != nil && *thumbPath != "" {
+        media.ThumbPath = thumbPath
+    }
+    if fileSize != nil && *fileSize > 0 {
+        media.FileSize = fileSize
+    }
+    if mimeType != nil && *mimeType != "" {
+        media.MimeType = mimeType
+    }
+    if originalFilename != nil && *originalFilename != "" {
+        media.OriginalFilename = originalFilename
+    }
+
+    if err := s.repo.CreateMedia(ctx, media); err != nil {
+        return nil, errs.E(ctx, "CAT_MEDIA_SAVE_FAILED", "فشل حفظ سجل الوسائط")
+    }
+
+    return &UploadMediaResponse{Media: *media}, nil
 }
 
 // NewService creates a new catalog service
@@ -267,6 +341,190 @@ func (s *Service) CreateProduct(ctx context.Context, req CreateProductRequest) (
 	}, nil
 }
 
+// UpdateProduct updates an existing product with provided details
+func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProductRequest) (*UpdateProductResponse, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Parse product ID
+	productID, err := parseProductID(id)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_INVALID_PRODUCT_ID", "معرّف المنتج غير صالح")
+	}
+
+	// Get existing product
+	existingProduct, err := s.repo.GetProductByID(ctx, productID)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل قراءة المنتج")
+	}
+	if existingProduct == nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+	}
+
+	// Check for pigeon ring number uniqueness if updating ring number
+	if existingProduct.Type == ProductTypePigeon && req.RingNumber != nil {
+		// Check if another pigeon has this ring number (excluding current product)
+		exists, err := s.repo.CheckRingNumberExistsExcluding(ctx, *req.RingNumber, productID)
+		if err != nil {
+			return nil, errs.E(ctx, "CAT_RING_CHECK_FAILED", "فشل التحقق من رقم الحلقة")
+		}
+		if exists {
+			return nil, errs.E(ctx, "CAT_RING_ALREADY_EXISTS", "رقم الحلقة موجود مسبقًا")
+		}
+	}
+
+	// Use wrapper function for atomic product update
+	var updatedProduct *Product
+	var updateErr error
+	
+	// Wrapper function to execute product update atomically
+	executeProductUpdate := func(ctx context.Context) error {
+		// Update product fields
+		updates := make(map[string]interface{})
+		
+		if req.Title != nil {
+			updates["title"] = *req.Title
+			// Generate new slug if title changed
+			if *req.Title != existingProduct.Title {
+				newSlug, err := s.slugifier.GenerateUnique(ctx, *req.Title, "products", "slug")
+				if err != nil {
+					return errs.E(ctx, "CAT_SLUG_GENERATE_FAILED", "فشل إنشاء معرّف slug للمنتج")
+				}
+				updates["slug"] = newSlug
+			}
+		}
+		
+		if req.Description != nil {
+			updates["description"] = *req.Description
+		}
+		
+		if req.PriceNet != nil {
+			updates["price_net"] = *req.PriceNet
+		}
+		
+		if req.Status != nil {
+			updates["status"] = *req.Status
+		}
+
+		// Update product table
+		if len(updates) > 0 {
+			if err := s.repo.UpdateProductPartial(ctx, productID, updates); err != nil {
+				return err
+			}
+		}
+
+		// Update type-specific details
+		switch existingProduct.Type {
+		case ProductTypePigeon:
+			pigeonUpdates := make(map[string]interface{})
+			
+			if req.RingNumber != nil {
+				pigeonUpdates["ring_number"] = *req.RingNumber
+			}
+			if req.Sex != nil {
+				pigeonUpdates["sex"] = *req.Sex
+			}
+			if req.BirthDate != nil {
+				pigeonUpdates["birth_date"] = *req.BirthDate
+			}
+			if req.Lineage != nil {
+				pigeonUpdates["lineage"] = *req.Lineage
+			}
+			if req.OriginProofURL != nil {
+				pigeonUpdates["origin_proof_url"] = *req.OriginProofURL
+			}
+			if req.OriginProofFileRef != nil {
+				pigeonUpdates["origin_proof_file_ref"] = *req.OriginProofFileRef
+			}
+
+			if len(pigeonUpdates) > 0 {
+				if err := s.repo.UpdatePigeon(ctx, productID, pigeonUpdates); err != nil {
+					return err
+				}
+			}
+
+		case ProductTypeSupply:
+			supplyUpdates := make(map[string]interface{})
+			
+			if req.SKU != nil {
+				supplyUpdates["sku"] = *req.SKU
+			}
+			if req.StockQty != nil {
+				supplyUpdates["stock_qty"] = *req.StockQty
+			}
+			if req.LowStockThreshold != nil {
+				supplyUpdates["low_stock_threshold"] = *req.LowStockThreshold
+			}
+
+			if len(supplyUpdates) > 0 {
+				if err := s.repo.UpdateSupply(ctx, productID, supplyUpdates); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	
+	// Execute within transaction using wrapper
+	updateErr = s.executeWithTransaction(ctx, executeProductUpdate)
+	if updateErr != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_UPDATE_FAILED", "فشل تحديث المنتج: " + updateErr.Error())
+	}
+
+	// Get updated product with details (outside transaction)
+	updatedProduct, err = s.repo.GetProductByID(ctx, productID)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل قراءة المنتج المحدث")
+	}
+
+	productWithDetails, err := s.getProductWithDetails(ctx, updatedProduct)
+	if err != nil {
+		return nil, err
+	}
+
+	return &UpdateProductResponse{
+		Product: *productWithDetails,
+	}, nil
+}
+
+// DeleteProduct soft deletes a product by setting its status to archived
+func (s *Service) DeleteProduct(ctx context.Context, id string) (*DeleteProductResponse, error) {
+	// Parse product ID
+	productID, err := parseProductID(id)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_INVALID_PRODUCT_ID", "معرّف المنتج غير صالح")
+	}
+
+	// Get existing product
+	existingProduct, err := s.repo.GetProductByID(ctx, productID)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل قراءة المنتج")
+	}
+	if existingProduct == nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+	}
+
+	// Check if product is already archived
+	if existingProduct.Status == ProductStatusArchived {
+		return nil, errs.E(ctx, "CAT_PRODUCT_ALREADY_ARCHIVED", "المنتج محذوف بالفعل")
+	}
+
+	// Soft delete by setting status to archived
+	updates := map[string]interface{}{
+		"status": ProductStatusArchived,
+	}
+
+	if err := s.repo.UpdateProductPartial(ctx, productID, updates); err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_DELETE_FAILED", "فشل حذف المنتج: " + err.Error())
+	}
+
+	return &DeleteProductResponse{
+		Message: "تم حذف المنتج بنجاح",
+		ID:      id,
+	}, nil
+}
+
 // UploadMedia uploads media file for a product
 func (s *Service) UploadMedia(ctx context.Context, productID int64, file multipart.File, header *multipart.FileHeader) (*UploadMediaResponse, error) {
 	// Check if product exists
@@ -440,6 +698,9 @@ func (s *Service) convertToSummary(ctx context.Context, product Product, vatSett
 		pigeon, err := s.repo.GetPigeonByProductID(ctx, product.ID)
 		if err == nil && pigeon != nil {
 			summary.RingNumber = &pigeon.RingNumber
+			summary.Sex = &pigeon.Sex
+			summary.BirthDate = pigeon.BirthDate
+			summary.Lineage = pigeon.Lineage
 		}
 
 	case ProductTypeSupply:
@@ -457,8 +718,11 @@ func (s *Service) convertToSummary(ctx context.Context, product Product, vatSett
 		// Find first image for thumbnail
 		for _, media := range mediaList {
 			if media.Kind == MediaKindImage && media.ThumbPath != nil {
-				publicURL := s.storage.GetPublicURL(*media.ThumbPath)
-				summary.ThumbnailURL = &publicURL
+				// If storage is not configured (e.g., local without GCS), skip generating public URL
+				if s.storage != nil {
+					publicURL := s.storage.GetPublicURL(*media.ThumbPath)
+					summary.ThumbnailURL = &publicURL
+				}
 				break
 			}
 		}

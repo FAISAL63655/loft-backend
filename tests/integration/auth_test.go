@@ -2,6 +2,9 @@ package integration
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,7 +38,7 @@ func TestRegisterUser(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "أحمد محمد",
 				Email:    "test_register_1@example.com",
-				Phone:    "+966501234567",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "SecurePass123!",
 			},
@@ -46,7 +49,7 @@ func TestRegisterUser(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "محمد أحمد",
 				Email:    "test_register_1@example.com", // نفس البريد
-				Phone:    "+966501234568",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "SecurePass123!",
 			},
@@ -58,7 +61,7 @@ func TestRegisterUser(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "سالم أحمد",
 				Email:    "test_register_2@example.com",
-				Phone:    "+966501234569",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "weak",
 			},
@@ -186,7 +189,7 @@ func TestEmailVerification(t *testing.T) {
 	registerReq := &authsvc.RegisterRequest{
 		Name:     "اختبار التفعيل",
 		Email:    "test_verify@example.com",
-		Phone:    "+966501234567",
+		Phone:    uniqueTestPhone(),
 		CityID:   1,
 		Password: "SecurePass123!",
 	}
@@ -332,6 +335,22 @@ func TestRefreshToken(t *testing.T) {
 
 // Helper functions
 
+var testPhoneCounter int64
+
+func uniqueTestPhone() string {
+    // Seed math/rand once (safe under race due to idempotence)
+    rand.Seed(time.Now().UnixNano())
+    // Combine time, atomic counter, and random component
+    n := time.Now().UnixNano()
+    c := atomic.AddInt64(&testPhoneCounter, 1)
+    r := int64(rand.Intn(1000000)) // 6-digit random
+    v := (n + c + r) % 100000000
+    if v < 0 {
+        v = -v
+    }
+    return fmt.Sprintf("+9665%08d", v)
+}
+
 func cleanupTestData(t *testing.T, db *sqldb.Database) {
 	ctx := context.Background()
 	queries := []string{
@@ -369,7 +388,7 @@ func createTestUser(t *testing.T, db *sqldb.Database, email, password string, ve
 		INSERT INTO users (name, email, password_hash, phone, city_id, role, state, email_verified_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'registered', 'active', $6, NOW(), NOW())
 		RETURNING id
-	`, "Test User", email, hashedPassword, "+966501234567", 1, verifiedAt).Scan(&userID)
+	`, "Test User", email, hashedPassword, uniqueTestPhone(), 1, verifiedAt).Scan(&userID)
 
 	if err != nil {
 		t.Fatalf("Failed to create test user: %v", err)

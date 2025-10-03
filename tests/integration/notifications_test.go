@@ -23,8 +23,8 @@ func createAdminUserNotifications(t *testing.T) int64 {
 	var id int64
 	if err := testDB.QueryRow(ctx, `
         INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at)
-        VALUES ('Admin Notif',$1,'x','+966500000000',1,'admin','active',NOW(),NOW(),NOW()) RETURNING id
-    `, email).Scan(&id); err != nil {
+        VALUES ('Admin Notif',$1,'x',$2,1,'admin','active',NOW(),NOW(),NOW()) RETURNING id
+    `, email, uniqueTestPhone()).Scan(&id); err != nil {
 		t.Fatalf("failed to create admin user: %v", err)
 	}
 	return id

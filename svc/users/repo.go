@@ -17,6 +17,32 @@ type Repository struct {
     db *sqldb.Database
 }
 
+
+// ListAdminUsers returns active admin users (id, name, email)
+func (r *Repository) ListAdminUsers(ctx context.Context) ([]User, error) {
+    rows, err := r.db.Query(ctx, `
+        SELECT id, COALESCE(name,''), COALESCE(email,'')
+        FROM users
+        WHERE role = 'admin' AND state = 'active'
+    `)
+    if err != nil {
+        return nil, &errs.Error{Code: errs.Internal, Message: "تعذر جلب المدراء"}
+    }
+    defer rows.Close()
+    var res []User
+    for rows.Next() {
+        var u User
+        if err := rows.Scan(&u.ID, &u.Name, &u.Email); err != nil {
+            return nil, &errs.Error{Code: errs.Internal, Message: "تعذر قراءة بيانات المدير"}
+        }
+        res = append(res, u)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, &errs.Error{Code: errs.Internal, Message: "تعذر إتمام قراءة المدراء"}
+    }
+    return res, nil
+}
+
 // NewRepository creates a new users repository
 func NewRepository(db *sqldb.Database) *Repository {
     return &Repository{db: db}

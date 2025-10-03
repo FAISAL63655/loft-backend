@@ -232,10 +232,18 @@ func GetAuction(ctx context.Context, id string) (*AuctionDetailResponse, error) 
 		bids = []*BidWithDetails{}
 	}
 
-	// Convert bids to response format
+	// Convert bids to response format (preserve bidder city)
 	bidResponses := make([]*BidResponse, len(bids))
 	for i, bid := range bids {
-		bidResponses[i] = ToSimpleBidResponse(&bid.Bid)
+		bidResponses[i] = &BidResponse{
+			ID:                 bid.ID,
+			AuctionID:          bid.AuctionID,
+			UserID:             bid.UserID,
+			Amount:             bid.Amount,
+			BidderNameSnapshot: bid.BidderNameSnapshot,
+			BidderCityName:     bid.BidderCityName,
+			CreatedAt:          bid.CreatedAt,
+		}
 	}
 
 	// Get reserve status if applicable

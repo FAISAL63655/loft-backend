@@ -19,8 +19,8 @@ func createActiveUserVerifiedEmail(t *testing.T) int64 {
 	var id int64
 	if err := testDB.QueryRow(ctx, `
         INSERT INTO users (name,email,password_hash,phone,city_id,role,state,email_verified_at,created_at,updated_at)
-        VALUES ('User Profile',$1,'x','+966533333333',1,'registered','active',NOW(),NOW(),NOW()) RETURNING id
-    `, email).Scan(&id); err != nil {
+        VALUES ('User Profile',$1,'x',$2,1,'registered','active',NOW(),NOW(),NOW()) RETURNING id
+    `, email, uniqueTestPhone()).Scan(&id); err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 	return id

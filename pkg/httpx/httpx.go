@@ -306,23 +306,20 @@ func getClientIPFromEncoreRequest(req *encore.Request) string {
 }
 
 // getHeaderFromRequest attempts to extract a header from Encore request
-// This is a helper function that provides a future-proof interface for header access
+// This is a helper function that tries different methods to access headers
 func getHeaderFromRequest(req *encore.Request, headerName string) string {
-	if req == nil || headerName == "" {
-		return ""
-	}
-
 	// Currently, Encore doesn't expose direct header access in *encore.Request
-	// This implementation provides a consistent interface for when Encore adds header support
-	
-	// The system currently relies on middleware to populate context with header values
-	// This ensures compatibility when Encore provides direct header access in future versions
-	
+	// This is a placeholder for when Encore provides header access API
+	// For now, we rely on middleware to store headers in context
+
 	// Future implementation when Encore supports it:
 	// if req.Headers != nil {
 	//     return req.Headers.Get(headerName)
 	// }
-	
+
+	// Placeholder - return empty until Encore exposes header access
+	_ = req
+	_ = headerName
 	return ""
 }
 
@@ -332,28 +329,12 @@ func getClientIPFromContextValue(ctx context.Context) string {
 		return ""
 	}
 
-	// Primary: Check if IP was stored in context by HTTPHeadersMiddleware
-	if ip, ok := ctx.Value(ContextKeyClientIP).(string); ok && ip != "" {
-		return ip
-	}
-
-	// Legacy: Check old context keys for backward compatibility
+	// Check if IP was stored in context by middleware
 	if ip, ok := ctx.Value("client_ip").(string); ok && ip != "" {
 		return ip
 	}
 
-	// Fallback: Check for X-Forwarded-For in context
-	if xff, ok := ctx.Value(ContextKeyXForwardedFor).(string); ok && xff != "" {
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			clientIP := strings.TrimSpace(ips[0])
-			if isValidIP(clientIP) {
-				return clientIP
-			}
-		}
-	}
-
-	// Legacy X-Forwarded-For check
+	// Check for X-Forwarded-For in context
 	if xff, ok := ctx.Value("x-forwarded-for").(string); ok && xff != "" {
 		ips := strings.Split(xff, ",")
 		if len(ips) > 0 {
@@ -370,22 +351,16 @@ func getClientIPFromContextValue(ctx context.Context) string {
 // GetUserAgentFromContext extracts User-Agent from Encore request context
 // This integrates with Encore's request handling
 func GetUserAgentFromContext(ctx context.Context) string {
-	// Primary: try to extract from context (set by middleware)
-	if userAgent := getUserAgentFromContextValue(ctx); userAgent != "" {
-		return userAgent
-	}
-
-	// Secondary: try to get current request from Encore
+	// Try to get current request from Encore
 	if req := encore.CurrentRequest(); req != nil {
 		// Extract User-Agent from request data if available
-		if userAgent := getUserAgentFromEncoreRequest(req); userAgent != "" {
-			return userAgent
-		}
+		// TODO: Implement proper Encore User-Agent extraction
+		return getUserAgentFromEncoreRequest(req)
 	}
 
-	// Fallback for development: use a meaningful default
-	if isLocalDevelopment() {
-		return "Loft-Development-Client/1.0"
+	// Fallback: try to extract from context if stored there
+	if userAgent := getUserAgentFromContextValue(ctx); userAgent != "" {
+		return userAgent
 	}
 
 	// Last resort: return unknown user agent
@@ -393,28 +368,9 @@ func GetUserAgentFromContext(ctx context.Context) string {
 }
 
 // getUserAgentFromEncoreRequest extracts User-Agent from Encore request
-// Professional implementation using current request context
 func getUserAgentFromEncoreRequest(req *encore.Request) string {
-	if req == nil {
-		return ""
-	}
-
-	// Get current context from Encore's request handling
-	// Since encore.Request doesn't expose Context() directly,
-	// we use the current request context from Encore's runtime
-	ctx := context.Background()
-	
-	// Try to get current request context if available
-	if currentReq := encore.CurrentRequest(); currentReq != nil {
-		// Extract User-Agent from the current request context
-		userAgent := getUserAgentFromContextValue(ctx)
-		if userAgent != "" {
-			return userAgent
-		}
-	}
-
-	// Professional fallback: return empty to allow system fallbacks
-	// This ensures graceful degradation without blocking functionality
+	// Fallback until Encore exposes direct User-Agent helpers.
+	_ = req
 	return ""
 }
 
@@ -424,16 +380,7 @@ func getUserAgentFromContextValue(ctx context.Context) string {
 		return ""
 	}
 
-	// Primary: Check if User-Agent was stored in context by HTTPHeadersMiddleware
-	if ua, ok := ctx.Value(ContextKeyUserAgent).(string); ok && ua != "" {
-		// Basic sanitization - limit length to prevent abuse
-		if len(ua) > 500 {
-			ua = ua[:500]
-		}
-		return ua
-	}
-
-	// Legacy: Check old context keys for backward compatibility
+	// Check if User-Agent was stored in context by middleware
 	if ua, ok := ctx.Value("user_agent").(string); ok && ua != "" {
 		// Basic sanitization - limit length to prevent abuse
 		if len(ua) > 500 {

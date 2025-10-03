@@ -36,3 +36,6 @@ coverage.html
 # Build artifacts
 dist/
 build/
+encore.gen.go
+encore.gen.cue
+/encore.gen

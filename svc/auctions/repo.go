@@ -400,7 +400,7 @@ func (r *Repository) GetAuctionsToClose(ctx context.Context) ([]*Auction, error)
 		       start_at, end_at, anti_sniping_minutes, status,
 		       extensions_count, max_extensions_override, created_at, updated_at
 		FROM auctions 
-		WHERE status = 'live' AND end_at <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE status = 'live' AND end_at <= NOW()
 		ORDER BY end_at ASC`
 
 	rows, err := r.db.Query(ctx, query)

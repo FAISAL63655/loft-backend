@@ -507,14 +507,21 @@ func (s *BidManagementService) sendPostRemovalNotifications(ctx context.Context,
 
 // notifyBidderRemoved sends notification to the bidder whose bid was removed
 func (s *BidManagementService) notifyBidderRemoved(ctx context.Context, bid *Bid, auction *Auction, reason, removedBy string) {
-	payload := map[string]interface{}{
-		"bidder_name": bid.BidderNameSnapshot,
-		"auction_id": auction.ID,
-		"bid_amount": fmt.Sprintf("%.2f", bid.Amount),
-		"reason": reason,
-		"removed_by": removedBy,
-		"language": "ar",
-	}
+    // Get product title for context
+    var productTitle string
+    if err := s.db.QueryRow(ctx, "SELECT title FROM products WHERE id = $1", auction.ProductID).Scan(&productTitle); err != nil {
+        productTitle = fmt.Sprintf("المزاد #%d", auction.ID)
+    }
+
+    payload := map[string]interface{}{
+        "bidder_name":  bid.BidderNameSnapshot,
+        "auction_id":   fmt.Sprint(auction.ID),
+        "product_title": productTitle,
+        "bid_amount":   fmt.Sprintf("%.2f", bid.Amount),
+        "reason":       reason,
+        "removed_by":   removedBy,
+        "language":     "ar",
+    }
 	
 	// Send internal notification
 	if _, err := notifications.EnqueueInternal(ctx, bid.UserID, "bid_removed", payload); err != nil {
@@ -535,6 +542,12 @@ func (s *BidManagementService) notifyBidderRemoved(ctx context.Context, bid *Bid
 
 // notifyAffectedBidders sends notifications to bidders who bid after the removed bid
 func (s *BidManagementService) notifyAffectedBidders(ctx context.Context, removedBid *Bid, auction *Auction, newPrice float64) {
+    // Get product title for context
+    var productTitle string
+    if err := s.db.QueryRow(ctx, "SELECT title FROM products WHERE id = $1", auction.ProductID).Scan(&productTitle); err != nil {
+        productTitle = fmt.Sprintf("المزاد #%d", auction.ID)
+    }
+
 	// Get affected bidders (those who bid after the removed bid)
 	query := `
 		SELECT DISTINCT b.user_id, u.email, u.name, b.bidder_name_snapshot
@@ -558,12 +571,13 @@ func (s *BidManagementService) notifyAffectedBidders(ctx context.Context, remove
 		}
 		
 		payload := map[string]interface{}{
-			"bidder_name": bidderName,
-			"auction_id": auction.ID,
-			"new_price": fmt.Sprintf("%.2f", newPrice),
-			"email": email,
-			"name": name,
-			"language": "ar",
+			"bidder_name":  bidderName,
+			"auction_id":   fmt.Sprint(auction.ID),
+			"product_title": productTitle,
+			"new_price":    fmt.Sprintf("%.2f", newPrice),
+			"email":        email,
+			"name":         name,
+			"language":     "ar",
 		}
 		
 		// Send internal notification
@@ -580,12 +594,12 @@ func (s *BidManagementService) notifyAffectedBidders(ctx context.Context, remove
 
 // notifyAuctionWatchers sends notifications to users watching the auction
 func (s *BidManagementService) notifyAuctionWatchers(ctx context.Context, auction *Auction, newPrice float64, reason string) {
-	// Get product title for notification context
-	var productTitle string
-	if err := s.db.QueryRow(ctx, "SELECT title FROM products WHERE id = $1", auction.ProductID).Scan(&productTitle); err != nil {
-		productTitle = fmt.Sprintf("المزاد #%d", auction.ID)
-	}
-	
+    // Get product title for context
+    var productTitle string
+    if err := s.db.QueryRow(ctx, "SELECT title FROM products WHERE id = $1", auction.ProductID).Scan(&productTitle); err != nil {
+        productTitle = fmt.Sprintf("المزاد #%d", auction.ID)
+    }
+
 	// Note: In a real implementation, you would have a watchers/followers table
 	// For now, we'll notify recent bidders as they are likely watching
 	query := `
@@ -612,14 +626,14 @@ func (s *BidManagementService) notifyAuctionWatchers(ctx context.Context, auctio
 		}
 		
 		payload := map[string]interface{}{
-			"bidder_name": bidderName,
-			"auction_id": auction.ID,
+			"bidder_name":  bidderName,
+			"auction_id":   fmt.Sprint(auction.ID),
 			"product_title": productTitle,
-			"new_price": fmt.Sprintf("%.2f", newPrice),
-			"reason": reason,
-			"email": email,
-			"name": name,
-			"language": "ar",
+			"new_price":    fmt.Sprintf("%.2f", newPrice),
+			"reason":       reason,
+			"email":        email,
+			"name":         name,
+			"language":     "ar",
 		}
 		
 		// Send internal notification only (avoid spam emails)

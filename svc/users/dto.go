@@ -63,6 +63,35 @@ type ReviewVerificationResponse struct {
 	Message string              `json:"message"`
 }
 
+// ListVerificationRequestsQuery represents list filters for verification requests (admin)
+type ListVerificationRequestsQuery struct {
+	Status string `json:"status,omitempty"` // optional: pending/approved/rejected; default: pending
+	Page   int    `json:"page,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// VerificationRequestListItem represents a verification request joined with basic user info (admin)
+type VerificationRequestListItem struct {
+	ID         int64      `json:"id"`
+	UserID     int64      `json:"user_id"`
+	UserName   string     `json:"user_name"`
+	UserEmail  string     `json:"user_email"`
+	UserPhone  string     `json:"user_phone"`
+	Note       string     `json:"note"`
+	Status     string     `json:"status"`
+	ReviewedBy *int64     `json:"reviewed_by"`
+	ReviewedAt *time.Time `json:"reviewed_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// ListVerificationRequestsResponse represents the list response for admin
+type ListVerificationRequestsResponse struct {
+	Items []VerificationRequestListItem `json:"items"`
+	Total int                           `json:"total"`
+	Page  int                           `json:"page"`
+	Limit int                           `json:"limit"`
+}
+
 // Address represents a user address
 type Address struct {
 	ID         int64      `json:"id"`

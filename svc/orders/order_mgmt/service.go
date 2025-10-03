@@ -145,6 +145,39 @@ type InvoicesResponse struct {
 	Items []InvoiceSummary `json:"items"`
 }
 
+//encore:api auth method=GET path=/orders/:id/invoice
+func GetOrderInvoice(ctx context.Context, id string) (*InvoiceSummary, error) {
+	uidStr, ok := auth.UserID()
+	if !ok {
+		return nil, &errs.Error{Code: errs.Unauthenticated, Message: "مطلوب تسجيل الدخول"}
+	}
+	uid, _ := strconv.ParseInt(string(uidStr), 10, 64)
+	var oid int64
+	if v, err := strconv.ParseInt(id, 10, 64); err == nil {
+		oid = v
+	} else {
+		return nil, &errs.Error{Code: errs.InvalidArgument, Message: "معرّف غير صالح"}
+	}
+	// Ownership or admin
+	var ownerID int64
+	if err := db.Stdlib().QueryRowContext(ctx, `SELECT user_id FROM orders WHERE id=$1`, oid).Scan(&ownerID); err != nil {
+		return nil, &errs.Error{Code: "ORD_NOT_FOUND", Message: "الطلب غير موجود"}
+	}
+	if ownerID != uid {
+		var role string
+		_ = db.Stdlib().QueryRowContext(ctx, `SELECT role::text FROM users WHERE id=$1`, uid).Scan(&role)
+		if strings.ToLower(role) != "admin" {
+			return nil, &errs.Error{Code: errs.Forbidden, Message: "غير مصرح"}
+		}
+	}
+	var res InvoiceSummary
+	// Each order has a single invoice (unique)
+	if err := db.Stdlib().QueryRowContext(ctx, `SELECT id, number, status::text FROM invoices WHERE order_id=$1`, oid).Scan(&res.ID, &res.Number, &res.Status); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل قراءة الفاتورة"}
+	}
+	return &res, nil
+}
+
 //encore:api auth method=GET path=/invoices
 func ListMyInvoices(ctx context.Context, q *Paginate) (*InvoicesResponse, error) {
 	uidStr, ok := auth.UserID()

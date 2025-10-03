@@ -48,7 +48,7 @@ func TestCompleteRegistrationFlow(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "أحمد محمد",
 				Email:    "test_registration@example.com",
-				Phone:    "+966501234567",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "SecurePass123!",
 			},
@@ -59,7 +59,7 @@ func TestCompleteRegistrationFlow(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "محمد أحمد",
 				Email:    "test_registration@example.com",
-				Phone:    "+966501234568",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "SecurePass123!",
 			},
@@ -70,7 +70,7 @@ func TestCompleteRegistrationFlow(t *testing.T) {
 			req: &authsvc.RegisterRequest{
 				Name:     "سالم أحمد",
 				Email:    "test_invalid_pw@example.com",
-				Phone:    "+966501234569",
+				Phone:    uniqueTestPhone(),
 				CityID:   1,
 				Password: "weak",
 			},
@@ -114,7 +114,7 @@ func TestEmailVerificationFlow(t *testing.T) {
 	_, err = svc.Register(ctx, &authsvc.RegisterRequest{
 		Name:     "اختبار",
 		Email:    email,
-		Phone:    "+966501234567",
+		Phone:    uniqueTestPhone(),
 		CityID:   1,
 		Password: "SecurePass123!",
 	})
@@ -170,8 +170,8 @@ func TestLoginRateLimitAndRefresh(t *testing.T) {
 	var userID int64
 	if err := db.QueryRow(ctx, `
 		INSERT INTO users (name,email,phone,city_id,password_hash,role,state,created_at,updated_at,email_verified_at)
-		VALUES ('Test','test_login@example.com','+966501234567',1,$1,'registered','active',NOW(),NOW(),NOW()) RETURNING id
-	`, hash).Scan(&userID); err != nil {
+		VALUES ('Test','test_login@example.com',$1,1,$2,'registered','active',NOW(),NOW(),NOW()) RETURNING id
+	`, uniqueTestPhone(), hash).Scan(&userID); err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
 

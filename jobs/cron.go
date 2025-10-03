@@ -8,7 +8,6 @@ import (
 	"encore.app/coredb"
 	"encore.app/pkg/audit"
 	"encore.app/svc/auctions"
-	"encore.app/svc/orders/cart"
 	"encore.app/svc/payments/worker"
 	"encore.dev/cron"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -28,16 +27,7 @@ var _ = cron.NewJob("auction-tick", cron.JobConfig{
 	Endpoint: RunAuctionTick,
 })
 
-//encore:api private
-func RunStockReservationCleaner(ctx context.Context) (*cart.CleanupResponse, error) {
-	return cart.CleanupExpiredReservations(ctx)
-}
-
-var _ = cron.NewJob("stock-reservation-cleaner", cron.JobConfig{
-	Title:    "Cleanup expired stock reservations",
-	Every:    5 * cron.Minute,
-	Endpoint: RunStockReservationCleaner,
-})
+// Reservation cleaner removed (no-reservation model)
 
 //encore:api private
 func RunPaymentInProgressCleaner(ctx context.Context) (*worker.CleanupResponse, error) {
@@ -109,3 +99,47 @@ var _ = cron.NewJob("daily-admin-digest", cron.JobConfig{
 func Metrics(w http.ResponseWriter, r *http.Request) {
 	promhttp.Handler().ServeHTTP(w, r)
 }
+
+// ===== Admin endpoints (temporary) to manually trigger cron jobs locally =====
+
+type RunAllCronResponse struct {
+    AuctionTick         string                    `json:"auction_tick"`
+    PaymentCleaner      string                    `json:"payment_cleaner"`
+    DailyAdminDigest    string                    `json:"daily_admin_digest"`
+    PaymentCleanerStats *worker.CleanupResponse   `json:"payment_cleaner_stats,omitempty"`
+}
+
+//encore:api public method=POST path=/admin/cron/run-all
+func RunAllCronJobs(ctx context.Context) (*RunAllCronResponse, error) {
+    out := &RunAllCronResponse{}
+
+    if err := RunAuctionTick(ctx); err != nil {
+        out.AuctionTick = err.Error()
+    } else {
+        out.AuctionTick = "ok"
+    }
+
+    if resp, err := RunPaymentInProgressCleaner(ctx); err != nil {
+        out.PaymentCleaner = err.Error()
+    } else {
+        out.PaymentCleaner = "ok"
+        out.PaymentCleanerStats = resp
+    }
+
+    if err := RunDailyAdminDigest(ctx); err != nil {
+        out.DailyAdminDigest = err.Error()
+    } else {
+        out.DailyAdminDigest = "ok"
+    }
+
+    return out, nil
+}
+
+//encore:api public method=POST path=/admin/cron/auction-tick
+func RunAuctionTickAdmin(ctx context.Context) error { return RunAuctionTick(ctx) }
+
+//encore:api public method=POST path=/admin/cron/payment-cleaner
+func RunPaymentCleanerAdmin(ctx context.Context) (*worker.CleanupResponse, error) { return RunPaymentInProgressCleaner(ctx) }
+
+//encore:api public method=POST path=/admin/cron/daily-admin-digest
+func RunDailyAdminDigestAdmin(ctx context.Context) error { return RunDailyAdminDigest(ctx) }
