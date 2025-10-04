@@ -21,11 +21,6 @@ import (
 // Database handle
 var db = sqldb.Named("coredb")
 
-// Optional Encore secret for seed protection. If not set, falls back to OS env SEED_SECRET
-var secrets struct {
-    SeedSecret string //encore:secret
-}
-
 //encore:service
 type Service struct{}
 
@@ -156,9 +151,6 @@ func RunSeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func getExpectedSecret() string {
-	if strings.TrimSpace(secrets.SeedSecret) != "" {
-		return strings.TrimSpace(secrets.SeedSecret)
-	}
 	return strings.TrimSpace(os.Getenv("SEED_SECRET"))
 }
 
