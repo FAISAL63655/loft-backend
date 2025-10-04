@@ -41,7 +41,7 @@ func TestProductsListRequestValidation(t *testing.T) {
 				Limit:   20,
 			},
 			expectError: true,
-			errorMsg:    "type must be 'pigeon' or 'supply'",
+			errorMsg:    "INVALID_ARGUMENT: type يجب أن يكون 'pigeon' أو 'supply'",
 		},
 		{
 			name: "Invalid status filter",
@@ -51,7 +51,7 @@ func TestProductsListRequestValidation(t *testing.T) {
 				Limit:     20,
 			},
 			expectError: true,
-			errorMsg:    "invalid status value",
+			errorMsg:    "INVALID_ARGUMENT: قيمة الحالة غير صالحة",
 		},
 		{
 			name: "Invalid price range - negative min",
@@ -61,7 +61,7 @@ func TestProductsListRequestValidation(t *testing.T) {
 				Limit:    20,
 			},
 			expectError: true,
-			errorMsg:    "price_min must be non-negative",
+			errorMsg:    "INVALID_ARGUMENT: price_min يجب ألا يكون سالبًا",
 		},
 		{
 			name: "Invalid price range - min > max",
@@ -72,7 +72,7 @@ func TestProductsListRequestValidation(t *testing.T) {
 				Limit:    20,
 			},
 			expectError: true,
-			errorMsg:    "price_min cannot be greater than price_max",
+			errorMsg:    "INVALID_ARGUMENT: price_min لا يمكن أن يكون أكبر من price_max",
 		},
 		{
 			name: "Invalid sort parameter",
@@ -82,7 +82,7 @@ func TestProductsListRequestValidation(t *testing.T) {
 				Limit:   20,
 			},
 			expectError: true,
-			errorMsg:    "sort must be one of: newest, oldest, price_asc, price_desc",
+			errorMsg:    "INVALID_ARGUMENT: sort يجب أن يكون: newest, oldest, price_asc, price_desc",
 		},
 		{
 			name: "Auto-correct page and limit",

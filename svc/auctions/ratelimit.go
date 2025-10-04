@@ -218,6 +218,19 @@ func (s *RateLimitService) getRateLimitConfig(ctx context.Context) (*RateLimitCo
 }
 
 func (s *RateLimitService) checkDatabaseRateLimit(ctx context.Context, userID int64, limit int, operation string) error {
+	// Check for user-specific rate limit override
+	if operation == "bids" {
+		var userLimit int
+		err := s.db.QueryRow(ctx, `
+			SELECT bids_per_minute 
+			FROM user_auction_rate_limits 
+			WHERE user_id = $1
+		`, userID).Scan(&userLimit)
+		if err == nil && userLimit > 0 {
+			limit = userLimit
+		}
+	}
+
 	var count int
 	var query string
 

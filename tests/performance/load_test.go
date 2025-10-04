@@ -412,15 +412,16 @@ func cleanupPerformanceTestData(t *testing.T, db *sqldb.Database) {
 
 func mustCreateProductPigeon(t *testing.T, db *sqldb.Database) int64 {
     ctx := context.Background()
-    // Strongly unique slug for high-concurrency runs
-    rand.Seed(time.Now().UnixNano())
+    // Strongly unique slug and ring number for high-concurrency runs
     c := atomic.AddInt64(&perfSlugCounter, 1)
+    rand.Seed(time.Now().UnixNano() + c)
     slug := fmt.Sprintf("perf-pigeon-%d-%d-%06d", time.Now().UnixNano(), c, rand.Intn(1_000_000))
+    ring := fmt.Sprintf("PR-%d-%d-%06d", time.Now().UnixNano(), c, rand.Intn(1_000_000))
+    
     var productID int64
     if err := db.QueryRow(ctx, `INSERT INTO products (type, title, slug, price_net, status) VALUES ('pigeon', 'Performance Test Pigeon', $1, 1000.00, 'available') RETURNING id`, slug).Scan(&productID); err != nil {
         t.Fatalf("Failed to create product: %v", err)
     }
-    ring := fmt.Sprintf("PR-%d", time.Now().UnixNano())
 	if _, err := db.Exec(ctx, `INSERT INTO pigeons (product_id, ring_number, sex) VALUES ($1, $2, 'male')`, productID, ring); err != nil {
 		t.Fatalf("Failed to create pigeon: %v", err)
 	}
@@ -468,6 +469,16 @@ func createVerifiedUser(t *testing.T, db *sqldb.Database, email string) int64 {
 
 	if err != nil {
 		t.Fatalf("Failed to create verified user: %v", err)
+	}
+
+	// Add rate limit override for performance testing (1000 bids/min)
+	_, err = db.Exec(ctx, `
+		INSERT INTO user_auction_rate_limits (user_id, bids_per_minute, created_at, updated_at)
+		VALUES ($1, 1000, NOW(), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET bids_per_minute = 1000, updated_at = NOW()
+	`, userID)
+	if err != nil {
+		t.Logf("Warning: Failed to set rate limit override: %v", err)
 	}
 
 	return userID

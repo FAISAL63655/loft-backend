@@ -152,7 +152,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestGetPublicURL(t *testing.T) {
-	client := &Client{bucketName: "test-bucket"}
+	client := &Client{bucketName: "test-bucket", isPublic: true}
 
 	gcsPath := "media/2025/01/01/12-00-00/test.jpg"
 	expected := "https://storage.googleapis.com/test-bucket/media/2025/01/01/12-00-00/test.jpg"

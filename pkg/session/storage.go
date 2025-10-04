@@ -3,7 +3,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -57,7 +56,7 @@ func (ms *MemoryStorage) GetSession(ctx context.Context, sessionID string) (*Ses
 
 	// Check if session has expired
 	if time.Now().UTC().After(session.ExpiresAt) {
-		return nil, fmt.Errorf("session expired")
+		return nil, ErrSessionExpired
 	}
 
 	// Return a copy to prevent external modification
