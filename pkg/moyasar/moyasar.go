@@ -183,17 +183,16 @@ func decodeBase64(s string) ([]byte, error) {
 }
 
 // CreateInvoice creates a moyasar invoice/payment link and returns (gatewayRef, sessionURL)
-// callbackURL: browser redirect after payment completion (user-facing)
-// returnURL: fallback/back button URL (user-facing)
-// webhookURL: server-to-server notification endpoint (optional, can be empty if configured in dashboard)
+// successURL: browser redirect after successful payment (user-facing)
+// backURL: browser redirect when user clicks back (user-facing)
+// callbackURL: server-to-server notification endpoint for invoice paid (optional)
 type createInvoiceReq struct {
     Amount      int               `json:"amount"`
     Currency    string            `json:"currency"`
     Description string            `json:"description,omitempty"`
-    CallbackURL string            `json:"callback_url,omitempty"`
-    ReturnURL   string            `json:"return_url,omitempty"`
+    SuccessURL  string            `json:"success_url,omitempty"`
     BackURL     string            `json:"back_url,omitempty"`
-    WebhookURL  string            `json:"webhook_url,omitempty"`
+    CallbackURL string            `json:"callback_url,omitempty"`
     Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
@@ -203,13 +202,13 @@ type createInvoiceResp struct {
     URL    string `json:"url"`
 }
 
-func CreateInvoice(amountHalalas int, currency, description, callbackURL, returnURL, webhookURL string, metadata map[string]string) (string, string, error) {
+func CreateInvoice(amountHalalas int, currency, description, successURL, backURL, callbackURL string, metadata map[string]string) (string, string, error) {
     // In test/local mode without API key, return a stub id and redirect directly back to our app
     if secrets.MoyasarAPIKey == "" {
         if inTestMode() {
             id := fmt.Sprintf("test_%d", time.Now().UTC().UnixNano())
             // Return to our app's pending page so sessionStorage fallback can resolve payment_id
-            return id, returnURL, nil
+            return id, successURL, nil
         }
         return "", "", fmt.Errorf("moyasar api key not set")
     }
@@ -221,10 +220,9 @@ func CreateInvoice(amountHalalas int, currency, description, callbackURL, return
         Amount:      amountHalalas,
         Currency:    currency,
         Description: description,
+        SuccessURL:  successURL,
+        BackURL:     backURL,
         CallbackURL: callbackURL,
-        ReturnURL:   returnURL,
-        BackURL:     returnURL,
-        WebhookURL:  webhookURL,
         Metadata:    metadata,
     }
     body, _ := json.Marshal(payload)
