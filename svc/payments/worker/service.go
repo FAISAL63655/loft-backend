@@ -156,21 +156,19 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 			}
 		}
 	}
-	// returnURL: where user is redirected after payment (browser redirect from Moyasar)
-	// Include payment_id placeholder - Moyasar will append its own params (id, status, etc)
-	returnURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, req.InvoiceID)
-	
-	// callbackURL: same as returnURL - Moyasar uses this for browser redirect after payment completion
-	callbackURL := returnURL
+	// successURL/backURL: where user is redirected after payment (browser redirect from Moyasar)
+	// Moyasar will append its own params (id, status, etc)
+	successURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, req.InvoiceID)
+	backURL := successURL
 
-	// webhookURL: server-to-server notification endpoint (optional if configured in dashboard)
-	webhookURL := ""
+	// callbackURL: server-to-server notification endpoint (optional if configured in dashboard)
+	callbackURL := ""
 	if encore.Meta().Environment.Type == encore.EnvLocal {
-		webhookURL = "http://127.0.0.1:4000/payments/webhook/moyasar"
+		callbackURL = "http://127.0.0.1:4000/payments/webhook/moyasar"
 	}
-	// Note: In production, webhook should be configured in Moyasar dashboard instead of per-payment
+	// Note: In production, webhook should be configured in Moyasar dashboard instead of per-invoice
 
-	gatewayRef, sessionURL, err := moyasar.CreateInvoice(halalas, currency, fmt.Sprintf("invoice:%d", req.InvoiceID), callbackURL, returnURL, webhookURL, map[string]string{"invoice_id": fmt.Sprint(req.InvoiceID)})
+	gatewayRef, sessionURL, err := moyasar.CreateInvoice(halalas, currency, fmt.Sprintf("invoice:%d", req.InvoiceID), successURL, backURL, callbackURL, map[string]string{"invoice_id": fmt.Sprint(req.InvoiceID)})
 	if err != nil {
 		logger.LogError(ctx, err, "moyasar create invoice failed", logger.Fields{
 			"invoice_id":      req.InvoiceID,
