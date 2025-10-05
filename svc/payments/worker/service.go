@@ -273,17 +273,53 @@ func MoyasarWebhook(w http.ResponseWriter, r *http.Request) {
 	    if sig == "" {
         sig = r.Header.Get("X-Webhook-Signature")
     }
-    // In test mode, bypass verification entirely (useful for local dev and sandbox)
-    if s := config.GetSettings(); !(s != nil && s.PaymentsTestMode) && !moyasar.VerifySignature(raw, sig) {
-		// Log minimal diagnostics (no secrets)
-		logger.Info(r.Context(), "moyasar webhook invalid signature", logger.Fields{
-			"sig_present": sig != "",
-			"sig_len":     len(sig),
-			"content_len": len(raw),
-		})
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"code":"PAY_WEBHOOK_INVALID_SIGNATURE","message":"invalid signature"}`))
-		        return
+    if sig == "" {
+        sig = r.Header.Get("Moyasar-Signature")
+    }
+    if sig == "" {
+        sig = r.Header.Get("Moyasar-Webhook-Signature")
+    }
+    // In test mode, bypass verification entirely (useful for local dev and sandbox).
+    // Otherwise, accept either header-based HMAC OR payload `secret_token` (per Moyasar docs).
+    if s := config.GetSettings(); !(s != nil && s.PaymentsTestMode) {
+        verified := false
+        // Try header-based HMAC first
+        if strings.TrimSpace(sig) != "" && moyasar.VerifySignature(raw, sig) {
+            verified = true
+        }
+        // If no valid signature header, try payload secret_token
+        if !verified {
+            ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+            var token string
+            if strings.Contains(ct, "application/x-www-form-urlencoded") {
+                if err := r.ParseForm(); err == nil {
+                    token = strings.TrimSpace(r.FormValue("secret_token"))
+                    if token == "" {
+                        token = strings.TrimSpace(r.FormValue("webhook[secret_token]"))
+                    }
+                }
+            } else {
+                var obj map[string]any
+                if err := json.Unmarshal(raw, &obj); err == nil {
+                    if v, ok := obj["secret_token"].(string); ok {
+                        token = strings.TrimSpace(v)
+                    }
+                }
+            }
+            if token != "" && moyasar.VerifySecretToken(token) {
+                verified = true
+            }
+        }
+        if !verified {
+            logger.Info(r.Context(), "moyasar webhook invalid signature", logger.Fields{
+                "sig_present": sig != "",
+                "sig_len":     len(sig),
+                "content_len": len(raw),
+            })
+            w.WriteHeader(http.StatusUnauthorized)
+            _, _ = w.Write([]byte(`{"code":"PAY_WEBHOOK_INVALID_SIGNATURE","message":"invalid signature"}`))
+            return
+        }
     }
 
     // Parse payload: support both JSON and application/x-www-form-urlencoded

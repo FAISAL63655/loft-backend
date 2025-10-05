@@ -32,7 +32,7 @@ func DynamicCORSMiddleware(settingsGetter CORSSettingsGetter) func(http.Handler)
 				AllowedMethods:     corsData.AllowedMethods,
 				AllowedHeaders:     corsData.AllowedHeaders,
 				ExposedHeaders:     []string{"Link", "X-Total-Count", "X-Request-ID"}, // Static exposed headers
-				AllowCredentials:   false,                                             // Security: keep static for now
+				AllowCredentials:   true,                                              // ✅ لازم يكون true عشان الكوكيز يمر
 				MaxAge:             corsData.MaxAge,
 				OptionsPassthrough: false,
 				UseSystemSettings:  false, // We're handling it manually here

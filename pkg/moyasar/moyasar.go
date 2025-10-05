@@ -126,6 +126,22 @@ func VerifySignature(rawBody []byte, signatureHeader string) bool {
     return false
 }
 
+// VerifySecretToken validates a plain secret token carried in the webhook payload (non-HMAC).
+// Some providers (including Moyasar) include `secret_token` in the webhook object instead of
+// an HMAC signature header. This helper compares the provided token with the configured secret.
+func VerifySecretToken(token string) bool {
+    // In local development, accept webhook to unblock workflows
+    if encore.Meta().Environment.Type == encore.EnvLocal {
+        return true
+    }
+    t := strings.TrimSpace(token)
+    s := strings.TrimSpace(secrets.MoyasarWebhookSecret)
+    if t == "" || s == "" {
+        return false
+    }
+    return t == s
+}
+
 func computeHMAC(body []byte, secret string) string {
     h := hmac.New(sha256.New, []byte(secret))
     h.Write(body)
