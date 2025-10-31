@@ -36,7 +36,7 @@ func TestOWASP_BrokenAccessControl_UnverifiedCannotBid(t *testing.T) {
 		t.Fatalf("seed pigeon: %v", err)
 	}
 
-	svc := auctionssvc.NewService(testDB)
+	svc := auctionssvc.NewService(testDB, nil) // nil storage for tests
 	auc, err := svc.CreateAuction(context.Background(), &auctionssvc.CreateAuctionRequest{ProductID: pid, StartPrice: 1000, BidStep: 10, StartAt: time.Now().Add(-time.Minute), EndAt: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("create auction: %v", err)
@@ -64,7 +64,7 @@ func TestOWASP_AuthRequired_PlaceBid(t *testing.T) {
 	_ = testDB.QueryRow(ctx, `INSERT INTO products(type,title,slug,description,price_net,status,created_at,updated_at) VALUES('pigeon',$1,$2,'d',1000,'available',NOW(),NOW()) RETURNING id`, "Sec2 Pigeon "+strconv.FormatInt(time.Now().UnixNano(), 10), "sec2-"+strconv.FormatInt(time.Now().UnixNano(), 10)).Scan(&pid)
 	_, _ = testDB.Exec(ctx, `INSERT INTO pigeons(product_id,ring_number,sex) VALUES($1,$2,'unknown')`, pid, "SE2-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 
-	svc := auctionssvc.NewService(testDB)
+	svc := auctionssvc.NewService(testDB, nil) // nil storage for tests
 	auc, _ := svc.CreateAuction(uidCtx(adminID, "admin"), &auctionssvc.CreateAuctionRequest{ProductID: pid, StartPrice: 1000, BidStep: 10, StartAt: time.Now().Add(-time.Minute), EndAt: time.Now().Add(time.Hour)})
 	_, _ = testDB.Exec(ctx, `UPDATE auctions SET status='live' WHERE id=$1`, auc.ID)
 

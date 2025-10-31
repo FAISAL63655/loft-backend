@@ -23,7 +23,7 @@ func TestCreateAuction(t *testing.T) {
 	cleanupAuctionTestData(t, db)
 	defer cleanupAuctionTestData(t, db)
 
-	auctionService := auctionssvc.NewService(testDB)
+	auctionService := auctionssvc.NewService(testDB, nil) // nil storage for tests
 
 	// إنشاء مستخدم admin للاختبار
 	adminUserID := createTestAdmin(t, db)
@@ -155,7 +155,7 @@ func TestPlaceBid(t *testing.T) {
 	cleanupAuctionTestData(t, db)
 	defer cleanupAuctionTestData(t, db)
 
-	_ = auctionssvc.NewService(testDB)
+	_ = auctionssvc.NewService(testDB, nil) // nil storage for tests
 	bidService := auctionssvc.NewBidService(testDB)
 
 	// إنشاء مزاد نشط للاختبار
@@ -261,7 +261,7 @@ func TestBidRateLimiting(t *testing.T) {
 	cleanupAuctionTestData(t, db)
 	defer cleanupAuctionTestData(t, db)
 
-	_ = auctionssvc.NewService(testDB)
+	_ = auctionssvc.NewService(testDB, nil) // nil storage for tests
 	bidService := auctionssvc.NewBidService(testDB)
 
 	// إنشاء مزاد نشط
@@ -308,7 +308,7 @@ func TestCancelAuction(t *testing.T) {
 	cleanupAuctionTestData(t, db)
 	defer cleanupAuctionTestData(t, db)
 
-	auctionService := auctionssvc.NewService(testDB)
+	auctionService := auctionssvc.NewService(testDB, nil) // nil storage for tests
 
 	// إنشاء admin و user
 	adminUserID := createTestAdmin(t, db)
@@ -403,16 +403,16 @@ func cleanupAuctionTestData(t *testing.T, db *sqldb.Database) {
 }
 
 func createTestAdmin(t *testing.T, db *sqldb.Database) int64 {
-    ctx := context.Background()
+	ctx := context.Background()
 
-    // تشفير كلمة المرور
-    hashedPassword, err := authn.HashPassword("AdminPass123!")
-    if err != nil {
-        t.Fatalf("Failed to hash password: %v", err)
-    }
+	// تشفير كلمة المرور
+	hashedPassword, err := authn.HashPassword("AdminPass123!")
+	if err != nil {
+		t.Fatalf("Failed to hash password: %v", err)
+	}
 
-    var adminID int64
-    err = db.QueryRow(ctx, `
+	var adminID int64
+	err = db.QueryRow(ctx, `
         INSERT INTO users (name, email, password_hash, phone, city_id, role, state, email_verified_at, created_at, updated_at)
         VALUES ('Admin User', 'test_admin@example.com', $1, $2, 1, 'admin', 'active', NOW(), NOW(), NOW())
         RETURNING id

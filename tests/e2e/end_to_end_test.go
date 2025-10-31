@@ -84,7 +84,7 @@ func TestEndToEnd_FullFlow(t *testing.T) {
 
 	// 2) Catalog: create product (already seeded) and create AUCTION by admin
 	productID := seedPigeonProduct(t)
-	aucSvc := auctionssvc.NewService(testDB)
+	aucSvc := auctionssvc.NewService(testDB, nil) // nil storage for tests
 	start := time.Now().Add(1 * time.Hour).UTC()
 	end := time.Now().Add(25 * time.Hour).UTC()
 	createReq := &auctionssvc.CreateAuctionRequest{
