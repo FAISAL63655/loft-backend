@@ -36,229 +36,229 @@ var secrets struct {
 //
 //encore:api auth raw method=POST path=/media-drafts/:session_id
 func UploadMediaDraft(w http.ResponseWriter, req *http.Request) {
-    ctx := req.Context()
+	ctx := req.Context()
 
-    // Initialize service if needed
-    if catalogService == nil {
-        if err := InitService(); err != nil {
-            writeErrorResponse(w, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج"))
-            return
-        }
-    }
+	// Initialize service if needed
+	if catalogService == nil {
+		if err := InitService(); err != nil {
+			writeErrorResponse(w, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج"))
+			return
+		}
+	}
 
-    // Check admin permissions
-    if err := checkAdminPermission(ctx); err != nil {
-        writeErrorResponse(w, err)
-        return
-    }
+	// Check admin permissions
+	if err := checkAdminPermission(ctx); err != nil {
+		writeErrorResponse(w, err)
+		return
+	}
 
-    // Extract session_id from URL path
-    path := req.URL.Path
-    parts := strings.Split(path, "/")
-    var sessionID string
-    for i, part := range parts {
-        if part == "media-drafts" && i+1 < len(parts) {
-            sessionID = parts[i+1]
-            break
-        }
-    }
-    if strings.TrimSpace(sessionID) == "" {
-        writeErrorResponse(w, errs.E(ctx, "CAT_SESSION_ID_REQUIRED", "مطلوب session_id"))
-        return
-    }
+	// Extract session_id from URL path
+	path := req.URL.Path
+	parts := strings.Split(path, "/")
+	var sessionID string
+	for i, part := range parts {
+		if part == "media-drafts" && i+1 < len(parts) {
+			sessionID = parts[i+1]
+			break
+		}
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		writeErrorResponse(w, errs.E(ctx, "CAT_SESSION_ID_REQUIRED", "مطلوب session_id"))
+		return
+	}
 
-    // Parse multipart form
-    if err := req.ParseMultipartForm(100 << 20); err != nil { // 100MB
-        writeErrorResponse(w, errs.E(ctx, "CAT_PARSE_MULTIPART_FAILED", "تعذر قراءة الطلب متعدد الأجزاء"))
-        return
-    }
+	// Parse multipart form
+	if err := req.ParseMultipartForm(100 << 20); err != nil { // 100MB
+		writeErrorResponse(w, errs.E(ctx, "CAT_PARSE_MULTIPART_FAILED", "تعذر قراءة الطلب متعدد الأجزاء"))
+		return
+	}
 
-    // Prepare upload config from settings
-    mediaSettings, _ := catalogService.getMediaSettings(ctx)
-    // Map service media settings to storagegcs settings type
-    sgcsSettings := storagegcs.MediaSettings{
-        WatermarkEnabled:  mediaSettings.WatermarkEnabled,
-        WatermarkPosition: mediaSettings.WatermarkPosition,
-        WatermarkOpacity:  mediaSettings.WatermarkOpacity,
-        ThumbnailsEnabled: mediaSettings.ThumbnailsEnabled,
-        ThumbnailSizes:    mediaSettings.ThumbnailSizes,
-        MaxFileSize:       mediaSettings.MaxFileSize,
-        AllowedTypes:      mediaSettings.AllowedTypes,
-    }
-    uploadCfg := storagegcs.CreateUploadConfigFromSettings(sgcsSettings)
+	// Prepare upload config from settings
+	mediaSettings, _ := catalogService.getMediaSettings(ctx)
+	// Map service media settings to storagegcs settings type
+	sgcsSettings := storagegcs.MediaSettings{
+		WatermarkEnabled:  mediaSettings.WatermarkEnabled,
+		WatermarkPosition: mediaSettings.WatermarkPosition,
+		WatermarkOpacity:  mediaSettings.WatermarkOpacity,
+		ThumbnailsEnabled: mediaSettings.ThumbnailsEnabled,
+		ThumbnailSizes:    mediaSettings.ThumbnailSizes,
+		MaxFileSize:       mediaSettings.MaxFileSize,
+		AllowedTypes:      mediaSettings.AllowedTypes,
+	}
+	uploadCfg := storagegcs.CreateUploadConfigFromSettings(sgcsSettings)
 
-    type DraftFile struct {
-        Kind     string `json:"kind"`
-        GCSPath  string `json:"gcs_path"`
-        Thumb    string `json:"thumb_path,omitempty"`
-        Size     int64  `json:"size,omitempty"`
-        Name     string `json:"name,omitempty"`
-    }
-    type DraftLink struct {
-        Kind string `json:"kind"`
-        URL  string `json:"url"`
-    }
-    var files []DraftFile
-    var links []DraftLink
+	type DraftFile struct {
+		Kind    string `json:"kind"`
+		GCSPath string `json:"gcs_path"`
+		Thumb   string `json:"thumb_path,omitempty"`
+		Size    int64  `json:"size,omitempty"`
+		Name    string `json:"name,omitempty"`
+	}
+	type DraftLink struct {
+		Kind string `json:"kind"`
+		URL  string `json:"url"`
+	}
+	var files []DraftFile
+	var links []DraftLink
 
-    // Handle links first (zero or many link_url values)
-    if form := req.MultipartForm; form != nil {
-        kind := strings.TrimSpace(req.FormValue("kind"))
-        for _, url := range form.Value["link_url"] {
-            u := strings.TrimSpace(url)
-            if u != "" {
-                links = append(links, DraftLink{Kind: kind, URL: u})
-            }
-        }
-    }
+	// Handle links first (zero or many link_url values)
+	if form := req.MultipartForm; form != nil {
+		kind := strings.TrimSpace(req.FormValue("kind"))
+		for _, url := range form.Value["link_url"] {
+			u := strings.TrimSpace(url)
+			if u != "" {
+				links = append(links, DraftLink{Kind: kind, URL: u})
+			}
+		}
+	}
 
-    // Handle files (one or many)
-    if form := req.MultipartForm; form != nil {
-        filesHeaders := form.File["file"]
-        for _, fh := range filesHeaders {
-            f, err := fh.Open()
-            if err != nil {
-                writeErrorResponse(w, errs.E(ctx, "CAT_MEDIA_OPEN_FAILED", "تعذر فتح الملف"))
-                return
-            }
-            defer f.Close()
+	// Handle files (one or many)
+	if form := req.MultipartForm; form != nil {
+		filesHeaders := form.File["file"]
+		for _, fh := range filesHeaders {
+			f, err := fh.Open()
+			if err != nil {
+				writeErrorResponse(w, errs.E(ctx, "CAT_MEDIA_OPEN_FAILED", "تعذر فتح الملف"))
+				return
+			}
+			defer f.Close()
 
-            // Upload via storage client (no DB record)
-            res, err := catalogService.storage.Upload(ctx, f, fh.Filename, uploadCfg)
-            if err != nil {
-                writeErrorResponse(w, errs.E(ctx, "CAT_MEDIA_UPLOAD_FAILED", "فشل رفع الملف إلى التخزين"))
-                return
-            }
+			// Upload via storage client (no DB record)
+			res, err := catalogService.storage.Upload(ctx, f, fh.Filename, uploadCfg)
+			if err != nil {
+				writeErrorResponse(w, errs.E(ctx, "CAT_MEDIA_UPLOAD_FAILED", "فشل رفع الملف إلى التخزين"))
+				return
+			}
 
-            kind := string(res.Kind)
-            df := DraftFile{
-                Kind:    kind,
-                GCSPath: res.GCSPath,
-                Thumb:   res.ThumbPath,
-                Size:    res.Size,
-                Name:    fh.Filename,
-            }
-            files = append(files, df)
-        }
-    }
+			kind := string(res.Kind)
+			df := DraftFile{
+				Kind:    kind,
+				GCSPath: res.GCSPath,
+				Thumb:   res.ThumbPath,
+				Size:    res.Size,
+				Name:    fh.Filename,
+			}
+			files = append(files, df)
+		}
+	}
 
-    // Respond with draft results (session-scoped client-side)
-    writeJSONResponse(w, http.StatusCreated, map[string]interface{}{
-        "session_id": sessionID,
-        "files":      files,
-        "links":      links,
-    })
+	// Respond with draft results (session-scoped client-side)
+	writeJSONResponse(w, http.StatusCreated, map[string]interface{}{
+		"session_id": sessionID,
+		"files":      files,
+		"links":      links,
+	})
 }
 
 // FinalizeMediaRequest represents draft items to attach to a product
 type FinalizeMediaRequest struct {
-    SessionID string `json:"session_id"`
-    Files     []struct {
-        Kind     string `json:"kind"`
-        GCSPath  string `json:"gcs_path"`
-        Thumb    string `json:"thumb_path,omitempty"`
-        Size     int64  `json:"size,omitempty"`
-        Name     string `json:"name,omitempty"`
-        MimeType string `json:"mime_type,omitempty"`
-    } `json:"files"`
-    Links []struct {
-        Kind string `json:"kind"`
-        URL  string `json:"url"`
-    } `json:"links"`
+	SessionID string `json:"session_id"`
+	Files     []struct {
+		Kind     string `json:"kind"`
+		GCSPath  string `json:"gcs_path"`
+		Thumb    string `json:"thumb_path,omitempty"`
+		Size     int64  `json:"size,omitempty"`
+		Name     string `json:"name,omitempty"`
+		MimeType string `json:"mime_type,omitempty"`
+	} `json:"files"`
+	Links []struct {
+		Kind string `json:"kind"`
+		URL  string `json:"url"`
+	} `json:"links"`
 }
 
 type FinalizeMediaResponse struct {
-    ProductID int64 `json:"product_id"`
-    Created   int   `json:"created"`
+	ProductID int64 `json:"product_id"`
+	Created   int   `json:"created"`
 }
 
 // FinalizeDraftMedia attaches previously uploaded draft items to a product by creating DB rows.
 //
 //encore:api auth method=POST path=/products/:id/media/finalize
 func FinalizeDraftMedia(ctx context.Context, id string, req *FinalizeMediaRequest) (*FinalizeMediaResponse, error) {
-    if catalogService == nil {
-        if err := InitService(); err != nil {
-            return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
-        }
-    }
+	if catalogService == nil {
+		if err := InitService(); err != nil {
+			return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
+		}
+	}
 
-    // Check admin permissions
-    if err := checkAdminPermission(ctx); err != nil {
-        return nil, err
-    }
+	// Check admin permissions
+	if err := checkAdminPermission(ctx); err != nil {
+		return nil, err
+	}
 
-    productID, err := strconv.ParseInt(id, 10, 64)
-    if err != nil {
-        return nil, errs.E(ctx, "CAT_INVALID_PRODUCT_ID", "معرّف المنتج غير صالح")
-    }
+	productID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_INVALID_PRODUCT_ID", "معرّف المنتج غير صالح")
+	}
 
-    // Ensure the product exists
-    p, err := catalogService.repo.GetProductByID(ctx, productID)
-    if err != nil {
-        return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل جلب المنتج")
-    }
-    if p == nil {
-        return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
-    }
+	// Ensure the product exists
+	p, err := catalogService.repo.GetProductByID(ctx, productID)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل جلب المنتج")
+	}
+	if p == nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+	}
 
-    created := 0
-    // Create media rows for files
-    for _, f := range req.Files {
-        mk := MediaKindFile
-        switch strings.ToLower(f.Kind) {
-        case "image":
-            mk = MediaKindImage
-        case "video":
-            mk = MediaKindVideo
-        }
+	created := 0
+	// Create media rows for files
+	for _, f := range req.Files {
+		mk := MediaKindFile
+		switch strings.ToLower(f.Kind) {
+		case "image":
+			mk = MediaKindImage
+		case "video":
+			mk = MediaKindVideo
+		}
 
-        var thumbPtr *string
-        if strings.TrimSpace(f.Thumb) != "" {
-            t := f.Thumb
-            thumbPtr = &t
-        }
-        var sizePtr *int64
-        if f.Size > 0 {
-            s := f.Size
-            sizePtr = &s
-        }
-        var mimePtr *string
-        if strings.TrimSpace(f.MimeType) != "" {
-            m := f.MimeType
-            mimePtr = &m
-        }
-        var namePtr *string
-        if strings.TrimSpace(f.Name) != "" {
-            n := f.Name
-            namePtr = &n
-        }
+		var thumbPtr *string
+		if strings.TrimSpace(f.Thumb) != "" {
+			t := f.Thumb
+			thumbPtr = &t
+		}
+		var sizePtr *int64
+		if f.Size > 0 {
+			s := f.Size
+			sizePtr = &s
+		}
+		var mimePtr *string
+		if strings.TrimSpace(f.MimeType) != "" {
+			m := f.MimeType
+			mimePtr = &m
+		}
+		var namePtr *string
+		if strings.TrimSpace(f.Name) != "" {
+			n := f.Name
+			namePtr = &n
+		}
 
-        m := &Media{
-            ProductID:        productID,
-            Kind:             mk,
-            GCSPath:          f.GCSPath,
-            ThumbPath:        thumbPtr,
-            WatermarkApplied: false,
-            FileSize:         sizePtr,
-            MimeType:         mimePtr,
-            OriginalFilename: namePtr,
-        }
-        if err := catalogService.repo.CreateMedia(ctx, m); err != nil {
-            return nil, errs.E(ctx, "CAT_MEDIA_SAVE_FAILED", "فشل حفظ سجل الوسائط")
-        }
-        created++
-    }
+		m := &Media{
+			ProductID:        productID,
+			Kind:             mk,
+			GCSPath:          f.GCSPath,
+			ThumbPath:        thumbPtr,
+			WatermarkApplied: false,
+			FileSize:         sizePtr,
+			MimeType:         mimePtr,
+			OriginalFilename: namePtr,
+		}
+		if err := catalogService.repo.CreateMedia(ctx, m); err != nil {
+			return nil, errs.E(ctx, "CAT_MEDIA_SAVE_FAILED", "فشل حفظ سجل الوسائط")
+		}
+		created++
+	}
 
-    // Create media rows for links
-    for _, l := range req.Links {
-        _, err := catalogService.CreateExternalMedia(ctx, productID, l.URL, l.Kind, nil, nil, nil, nil)
-        if err != nil {
-            return nil, err
-        }
-        created++
-    }
+	// Create media rows for links
+	for _, l := range req.Links {
+		_, err := catalogService.CreateExternalMedia(ctx, productID, l.URL, l.Kind, nil, nil, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		created++
+	}
 
-    return &FinalizeMediaResponse{ProductID: productID, Created: created}, nil
+	return &FinalizeMediaResponse{ProductID: productID, Created: created}, nil
 }
 
 // checkAdminPermission validates that the current user has admin role
@@ -301,7 +301,7 @@ func InitService() error {
 	// Initialize storage client using Encore secrets
 	// GCS secrets configured via Encore secrets management:
 	// Production: encore secret set --prod GCS_PROJECT_ID <project-id>
-	// Production: encore secret set --prod GCS_BUCKET_NAME <bucket-name>  
+	// Production: encore secret set --prod GCS_BUCKET_NAME <bucket-name>
 	// Production: encore secret set --prod GCS_CREDENTIALS_JSON <base64-credentials>
 	// Development: encore secret set --dev GCS_PROJECT_ID <dev-project-id>
 	// Development: encore secret set --dev GCS_BUCKET_NAME <dev-bucket-name>
@@ -314,13 +314,13 @@ func InitService() error {
 	}
 
 	storageClient, err := storagegcs.NewClient(context.Background(), storageConfig)
-    if err != nil {
-        // In local/dev environments it's common to not have GCS credentials configured.
-        // Do not fail service initialization – continue without storage so read-only endpoints work.
-        // Media uploads will be disabled until storage is configured.
-        fmt.Printf("[catalog] storage init failed, continuing without GCS (thumbnails disabled): %v\n", err)
-        storageClient = nil
-    }
+	if err != nil {
+		// In local/dev environments it's common to not have GCS credentials configured.
+		// Do not fail service initialization – continue without storage so read-only endpoints work.
+		// Media uploads will be disabled until storage is configured.
+		fmt.Printf("[catalog] storage init failed, continuing without GCS (thumbnails disabled): %v\n", err)
+		storageClient = nil
+	}
 
 	// Initialize config manager (global, hot-reload every 5 minutes)
 	configMgr := config.Initialize(db, 5*time.Minute)
@@ -352,7 +352,7 @@ func GetProducts(ctx context.Context, req *ProductsListRequest) (*ProductsListRe
 	return catalogService.GetProducts(ctx, *req)
 }
 
-// GetProduct retrieves a single product by ID
+// GetProduct retrieves a single product by ID or slug
 //
 //encore:api public method=GET path=/products/:id
 func GetProduct(ctx context.Context, id string) (*ProductDetailResponse, error) {
@@ -362,13 +362,15 @@ func GetProduct(ctx context.Context, id string) (*ProductDetailResponse, error) 
 		}
 	}
 
-	// Parse product ID
+	// Try to parse as ID first
 	productID, err := strconv.ParseInt(id, 10, 64)
-	if err != nil {
-		return nil, errs.E(ctx, "CAT_INVALID_PRODUCT_ID", "معرّف المنتج غير صالح")
+	if err == nil {
+		// It's a valid ID, use it
+		return catalogService.GetProductByID(ctx, productID)
 	}
 
-	return catalogService.GetProductByID(ctx, productID)
+	// Not a valid ID, treat as slug
+	return catalogService.GetProductBySlug(ctx, id)
 }
 
 // CreateProduct creates a new product (Admin only)
@@ -497,8 +499,15 @@ func UploadProductMedia(w http.ResponseWriter, req *http.Request) {
 	}
 	defer file.Close()
 
+	// Get description from form data (optional)
+	var description *string
+	descValue := strings.TrimSpace(req.FormValue("description"))
+	if descValue != "" {
+		description = &descValue
+	}
+
 	// Call service method
-	response, err := catalogService.UploadMedia(ctx, productID, file, header)
+	response, err := catalogService.UploadMedia(ctx, productID, file, header, description)
 	if err != nil {
 		writeErrorResponse(w, err)
 		return
@@ -534,17 +543,16 @@ func UpdateProductMedia(ctx context.Context, productId, mediaId string, req *Upd
 		return nil, err
 	}
 
-	// Set archived_at to now if archiving
+	// Extract description and archived_at from request
+	var description *string
 	var archivedAt *time.Time
-	if req != nil && req.ArchivedAt != nil {
+
+	if req != nil {
+		description = req.Description
 		archivedAt = req.ArchivedAt
-	} else {
-		// Default to archiving (set to current time)
-		now := time.Now()
-		archivedAt = &now
 	}
 
-	return catalogService.UpdateMedia(ctx, productID, mediaID, archivedAt)
+	return catalogService.UpdateMedia(ctx, productID, mediaID, description, archivedAt)
 }
 
 // GetProductMediaList retrieves all media for a product (helper endpoint)
@@ -579,9 +587,33 @@ func GetProductMediaList(ctx context.Context, id string) (*ProductMediaListRespo
 		return nil, errs.E(ctx, "CAT_MEDIA_READ_FAILED", "فشل جلب الوسائط")
 	}
 
+	// Generate signed URLs for media (valid for 1 hour)
+	mediaWithURLs := make([]MediaWithURL, len(mediaList))
+	for i, media := range mediaList {
+		mediaWithURLs[i] = MediaWithURL{
+			Media: media,
+		}
+
+		// Generate signed URL for main image
+		if catalogService.storage != nil {
+			signedURL, err := catalogService.storage.GetSecureURL(ctx, media.GCSPath, 1*time.Hour)
+			if err == nil {
+				mediaWithURLs[i].SignedURL = &signedURL
+			}
+
+			// Generate signed URL for thumbnail if exists
+			if media.ThumbPath != nil && *media.ThumbPath != "" {
+				thumbURL, err := catalogService.storage.GetSecureURL(ctx, *media.ThumbPath, 1*time.Hour)
+				if err == nil {
+					mediaWithURLs[i].ThumbSignedURL = &thumbURL
+				}
+			}
+		}
+	}
+
 	return &ProductMediaListResponse{
 		ProductID: productID,
-		Media:     mediaList,
+		Media:     mediaWithURLs,
 	}, nil
 }
 
@@ -598,6 +630,7 @@ func HealthCheck(ctx context.Context) (*HealthCheckResponse, error) {
 // ========================= Q&A: Products =========================
 
 // GetProductQuestions lists approved questions for a product (public)
+//
 //encore:api public method=GET path=/catalog/products/:id/questions
 func GetProductQuestions(ctx context.Context, id string) (*ProductQuestionsResponse, error) {
 	if catalogService == nil {
@@ -623,6 +656,7 @@ func GetProductQuestions(ctx context.Context, id string) (*ProductQuestionsRespo
 }
 
 // CreateProductQuestion creates a new question for a product (public)
+//
 //encore:api public method=POST path=/catalog/products/:id/questions
 func CreateProductQuestion(ctx context.Context, id string, req *CreateQuestionRequest) (*ProductQuestion, error) {
 	if catalogService == nil {
@@ -657,6 +691,7 @@ func CreateProductQuestion(ctx context.Context, id string, req *CreateQuestionRe
 }
 
 // Admin: list product questions with filters
+//
 //encore:api auth method=GET path=/catalog/admin/questions/products
 func AdminListProductQuestions(ctx context.Context, req *ListQuestionsAdminRequest) (*ProductQuestionsResponse, error) {
 	if catalogService == nil {
@@ -688,64 +723,67 @@ func AdminListProductQuestions(ctx context.Context, req *ListQuestionsAdminReque
 }
 
 // Admin: answer a product question and approve it
+//
 //encore:api auth method=POST path=/catalog/admin/questions/products/:qid/answer
 func AdminAnswerProductQuestion(ctx context.Context, qid string, req *AnswerQuestionRequest) (*ProductQuestion, error) {
-    if catalogService == nil {
-        if err := InitService(); err != nil {
-            return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
-        }
-    }
-    if err := checkAdminPermission(ctx); err != nil {
-        return nil, err
-    }
-    if req == nil {
-        return nil, errs.New(errs.InvalidArgument, "الطلب فارغ")
-    }
-    if err := req.Validate(); err != nil {
-        return nil, err
-    }
-    qidInt, err := strconv.ParseInt(qid, 10, 64)
-    if err != nil {
-        return nil, errs.New(errs.InvalidArgument, "معرّف السؤال غير صالح")
-    }
-    uidStr, _ := auth.UserID()
-    answeredBy, _ := strconv.ParseInt(string(uidStr), 10, 64)
-    q, err := catalogService.repo.AnswerProductQuestion(ctx, qidInt, req.Answer, answeredBy)
-    if err != nil {
-        return nil, errs.E(ctx, "CAT_Q_ANSWER_FAILED", "فشل حفظ الإجابة")
-    }
-    return q, nil
+	if catalogService == nil {
+		if err := InitService(); err != nil {
+			return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
+		}
+	}
+	if err := checkAdminPermission(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, errs.New(errs.InvalidArgument, "الطلب فارغ")
+	}
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	qidInt, err := strconv.ParseInt(qid, 10, 64)
+	if err != nil {
+		return nil, errs.New(errs.InvalidArgument, "معرّف السؤال غير صالح")
+	}
+	uidStr, _ := auth.UserID()
+	answeredBy, _ := strconv.ParseInt(string(uidStr), 10, 64)
+	q, err := catalogService.repo.AnswerProductQuestion(ctx, qidInt, req.Answer, answeredBy)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_Q_ANSWER_FAILED", "فشل حفظ الإجابة")
+	}
+	return q, nil
 }
 
 // Admin: set product question status
+//
 //encore:api auth method=PATCH path=/catalog/admin/questions/products/:qid/status
 func AdminSetProductQuestionStatus(ctx context.Context, qid string, req *SetQuestionStatusRequest) (*MessageResponse, error) {
-    if catalogService == nil {
-        if err := InitService(); err != nil {
-            return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
-        }
-    }
-    if err := checkAdminPermission(ctx); err != nil {
-        return nil, err
-    }
-    if req == nil || strings.TrimSpace(req.Status) == "" {
-        return nil, errs.New(errs.InvalidArgument, "الحالة مطلوبة")
-    }
-    s := QuestionStatus(strings.ToLower(strings.TrimSpace(req.Status)))
-    if s != QuestionStatusPending && s != QuestionStatusApproved && s != QuestionStatusRejected {
-        return nil, errs.New(errs.InvalidArgument, "قيمة الحالة غير صالحة")
-    }
-    qidInt, err := strconv.ParseInt(qid, 10, 64)
-    if err != nil {
-        return nil, errs.New(errs.InvalidArgument, "معرّف السؤال غير صالح")
-    }
-    if err := catalogService.repo.SetProductQuestionStatus(ctx, qidInt, s); err != nil {
-        return nil, errs.E(ctx, "CAT_Q_SET_STATUS_FAILED", "فشل تحديث الحالة")
-    }
-    return &MessageResponse{Message: "تم التحديث"}, nil
+	if catalogService == nil {
+		if err := InitService(); err != nil {
+			return nil, errs.E(ctx, "CAT_INIT_FAILED", "فشل تهيئة خدمة الكتالوج")
+		}
+	}
+	if err := checkAdminPermission(ctx); err != nil {
+		return nil, err
+	}
+	if req == nil || strings.TrimSpace(req.Status) == "" {
+		return nil, errs.New(errs.InvalidArgument, "الحالة مطلوبة")
+	}
+	s := QuestionStatus(strings.ToLower(strings.TrimSpace(req.Status)))
+	if s != QuestionStatusPending && s != QuestionStatusApproved && s != QuestionStatusRejected {
+		return nil, errs.New(errs.InvalidArgument, "قيمة الحالة غير صالحة")
+	}
+	qidInt, err := strconv.ParseInt(qid, 10, 64)
+	if err != nil {
+		return nil, errs.New(errs.InvalidArgument, "معرّف السؤال غير صالح")
+	}
+	if err := catalogService.repo.SetProductQuestionStatus(ctx, qidInt, s); err != nil {
+		return nil, errs.E(ctx, "CAT_Q_SET_STATUS_FAILED", "فشل تحديث الحالة")
+	}
+	return &MessageResponse{Message: "تم التحديث"}, nil
 }
 
 // Admin: list auction questions with filters
+//
 //encore:api auth method=GET path=/catalog/admin/questions/auctions
 func AdminListAuctionQuestions(ctx context.Context, req *ListQuestionsAdminRequest) (*AuctionQuestionsResponse, error) {
 	if catalogService == nil {
@@ -777,6 +815,7 @@ func AdminListAuctionQuestions(ctx context.Context, req *ListQuestionsAdminReque
 }
 
 // Admin: answer an auction question and approve it
+//
 //encore:api auth method=POST path=/catalog/admin/questions/auctions/:qid/answer
 func AdminAnswerAuctionQuestion(ctx context.Context, qid string, req *AnswerQuestionRequest) (*AuctionQuestion, error) {
 	if catalogService == nil {
@@ -807,6 +846,7 @@ func AdminAnswerAuctionQuestion(ctx context.Context, qid string, req *AnswerQues
 }
 
 // Admin: set auction question status
+//
 //encore:api auth method=PATCH path=/catalog/admin/questions/auctions/:qid/status
 func AdminSetAuctionQuestionStatus(ctx context.Context, qid string, req *SetQuestionStatusRequest) (*MessageResponse, error) {
 	if catalogService == nil {
@@ -834,10 +874,17 @@ func AdminSetAuctionQuestionStatus(ctx context.Context, qid string, req *SetQues
 	return &MessageResponse{Message: "تم التحديث"}, nil
 }
 
+// MediaWithURL extends Media with signed URLs
+type MediaWithURL struct {
+	Media          Media   `json:"media"`
+	SignedURL      *string `json:"signed_url,omitempty"`       // Signed URL for main image
+	ThumbSignedURL *string `json:"thumb_signed_url,omitempty"` // Signed URL for thumbnail
+}
+
 // ProductMediaListResponse represents the response for getting product media list
 type ProductMediaListResponse struct {
-	ProductID int64   `json:"product_id"`
-	Media     []Media `json:"media"`
+	ProductID int64          `json:"product_id"`
+	Media     []MediaWithURL `json:"media"`
 }
 
 // Helper functions for HTTP response handling

@@ -63,6 +63,7 @@ type AuctionWithDetails struct {
 	Auction
 	ProductTitle      string  `json:"product_title"`
 	ProductSlug       string  `json:"product_slug"`
+	ThumbnailURL      *string `json:"thumbnail_url,omitempty"`
 	CurrentPrice      float64 `json:"current_price"`
 	BidsCount         int     `json:"bids_count"`
 	HighestBidder     *string `json:"highest_bidder,omitempty"`

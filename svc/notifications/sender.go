@@ -118,8 +118,7 @@ func ProcessEmailQueue(ctx context.Context) (*ProcessEmailQueueResponse, error) 
 		}
 
 		mail := mailer.Mail{
-			FromName:  "Loft Dughairi",
-			FromEmail: "contact@dughairiloft.com",
+			// FromName and FromEmail will use defaults from mailer.Client secrets
 			ToName:    toName,
 			ToEmail:   toEmail,
 			Subject:   subject,

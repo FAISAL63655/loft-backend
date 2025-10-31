@@ -28,34 +28,34 @@ type Service struct {
 
 //encore:api auth method=POST path=/admin/cities
 func (s *Service) CreateCity(ctx context.Context, req *CreateCityRequest) (*ListCitiesResponse, error) {
-    if _, ok := auth.UserID(); !ok {
-        return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
-    }
-    if !isAdmin() {
-        return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
-    }
-    if req == nil || strings.TrimSpace(req.NameAr) == "" || strings.TrimSpace(req.ShippingFeeNet) == "" {
-        return nil, errs.New(errs.InvalidArgument, "الاسم العربي وقيمة الشحن مطلوبة")
-    }
-    // Basic numeric validation for shipping fee
-    if _, err := strconv.ParseFloat(strings.TrimSpace(req.ShippingFeeNet), 64); err != nil {
-        return nil, errs.New(errs.ValidationFailed, "قيمة رسوم الشحن غير صالحة")
-    }
+	if _, ok := auth.UserID(); !ok {
+		return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	if !isAdmin() {
+		return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+	if req == nil || strings.TrimSpace(req.NameAr) == "" || strings.TrimSpace(req.ShippingFeeNet) == "" {
+		return nil, errs.New(errs.InvalidArgument, "الاسم العربي وقيمة الشحن مطلوبة")
+	}
+	// Basic numeric validation for shipping fee
+	if _, err := strconv.ParseFloat(strings.TrimSpace(req.ShippingFeeNet), 64); err != nil {
+		return nil, errs.New(errs.ValidationFailed, "قيمة رسوم الشحن غير صالحة")
+	}
 
-    nameEn := ""
-    if req.NameEn != nil {
-        nameEn = strings.TrimSpace(*req.NameEn)
-    }
+	nameEn := ""
+	if req.NameEn != nil {
+		nameEn = strings.TrimSpace(*req.NameEn)
+	}
 
-    // Insert city
-    if _, err := db.Stdlib().ExecContext(ctx,
-        `INSERT INTO cities (name_ar, name_en, shipping_fee_net, enabled) VALUES ($1, $2, $3, $4)`,
-        strings.TrimSpace(req.NameAr), nameEn, strings.TrimSpace(req.ShippingFeeNet), req.Enabled,
-    ); err != nil {
-        return nil, errs.New(errs.Internal, "فشل إنشاء المدينة")
-    }
+	// Insert city
+	if _, err := db.Stdlib().ExecContext(ctx,
+		`INSERT INTO cities (name_ar, name_en, shipping_fee_net, enabled) VALUES ($1, $2, $3, $4)`,
+		strings.TrimSpace(req.NameAr), nameEn, strings.TrimSpace(req.ShippingFeeNet), req.Enabled,
+	); err != nil {
+		return nil, errs.New(errs.Internal, "فشل إنشاء المدينة")
+	}
 
-    return s.ListCities(ctx)
+	return s.ListCities(ctx)
 }
 
 func initService() (*Service, error) {
@@ -1239,11 +1239,11 @@ func (s *Service) ListAuctions(ctx context.Context, req *ListAuctionsRequest) (*
 		var currentPrice sql.NullString
 		var maxExt sql.NullInt64
 		var winnerID sql.NullInt64
-		
+
 		if err := rows.Scan(
-			&it.ID, 
-			&it.ProductID, 
-			&it.Title, 
+			&it.ID,
+			&it.ProductID,
+			&it.Title,
 			&it.Status,
 			&it.StartPrice,
 			&it.BidStep,
@@ -1254,12 +1254,12 @@ func (s *Service) ListAuctions(ctx context.Context, req *ListAuctionsRequest) (*
 			&it.ExtensionsCount,
 			&maxExt,
 			&winnerID,
-			&it.StartAt, 
+			&it.StartAt,
 			&it.EndAt,
 		); err != nil {
 			return nil, errs.New(errs.Internal, "فشل قراءة صف مزاد")
 		}
-		
+
 		if reservePrice.Valid {
 			it.ReservePrice = &reservePrice.String
 		}
@@ -1273,7 +1273,7 @@ func (s *Service) ListAuctions(ctx context.Context, req *ListAuctionsRequest) (*
 		if winnerID.Valid {
 			it.WinnerUserID = &winnerID.Int64
 		}
-		
+
 		items = append(items, it)
 	}
 
@@ -1291,6 +1291,7 @@ type ListOrdersRequest struct {
 	Status string `query:"status"` // pending_payment|paid|cancelled|awaiting_admin_refund|refund_required|refunded
 	UserID int64  `query:"user_id"`
 	Source string `query:"source"` // auction|direct
+	Q      string `query:"q"`      // Search by user name or phone
 	Page   int    `query:"page"`
 	Limit  int    `query:"limit"`
 }
@@ -1298,6 +1299,9 @@ type ListOrdersRequest struct {
 type AdminOrderItem struct {
 	ID         int64  `json:"id"`
 	UserID     int64  `json:"user_id"`
+	UserName   string `json:"user_name"`
+	UserPhone  string `json:"user_phone"`
+	UserCity   string `json:"user_city"`
 	Source     string `json:"source"`
 	Status     string `json:"status"`
 	GrandTotal string `json:"grand_total"`
@@ -1332,28 +1336,35 @@ func (s *Service) ListOrders(ctx context.Context, req *ListOrdersRequest) (*List
 	}
 	offset := (page - 1) * limit
 
-	base := `SELECT id, user_id, source::text, status::text, grand_total::text,
-                    to_char(created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
-             FROM orders`
+	base := `SELECT o.id, o.user_id, COALESCE(u.name, ''), COALESCE(u.phone, ''), COALESCE(c.name_ar, ''), o.source::text, o.status::text, o.grand_total::text,
+                    to_char(o.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')
+             FROM orders o
+             LEFT JOIN users u ON u.id = o.user_id
+             LEFT JOIN cities c ON c.id = u.city_id`
 	var whereParts []string
 	var args []interface{}
 	addArg := func(v interface{}) string { args = append(args, v); return fmt.Sprintf("$%d", len(args)) }
 	if req != nil {
 		if strings.TrimSpace(req.Status) != "" {
-			whereParts = append(whereParts, fmt.Sprintf("status = %s", addArg(req.Status)))
+			whereParts = append(whereParts, fmt.Sprintf("o.status = %s", addArg(req.Status)))
 		}
 		if req.UserID > 0 {
-			whereParts = append(whereParts, fmt.Sprintf("user_id = %s", addArg(req.UserID)))
+			whereParts = append(whereParts, fmt.Sprintf("o.user_id = %s", addArg(req.UserID)))
 		}
 		if strings.TrimSpace(req.Source) != "" {
-			whereParts = append(whereParts, fmt.Sprintf("source = %s", addArg(req.Source)))
+			whereParts = append(whereParts, fmt.Sprintf("o.source = %s", addArg(req.Source)))
+		}
+		if strings.TrimSpace(req.Q) != "" {
+			// Search by user name or phone
+			searchPattern := "%" + strings.TrimSpace(req.Q) + "%"
+			whereParts = append(whereParts, fmt.Sprintf("(u.name ILIKE %s OR u.phone ILIKE %s)", addArg(searchPattern), addArg(searchPattern)))
 		}
 	}
 	where := ""
 	if len(whereParts) > 0 {
 		where = " WHERE " + strings.Join(whereParts, " AND ")
 	}
-	order := " ORDER BY created_at DESC"
+	order := " ORDER BY o.created_at DESC"
 	pag := fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
 	rows, err := db.Stdlib().QueryContext(ctx, base+where+order+pag, args...)
@@ -1365,17 +1376,81 @@ func (s *Service) ListOrders(ctx context.Context, req *ListOrdersRequest) (*List
 	items := make([]AdminOrderItem, 0, limit)
 	for rows.Next() {
 		var it AdminOrderItem
-		if err := rows.Scan(&it.ID, &it.UserID, &it.Source, &it.Status, &it.GrandTotal, &it.CreatedAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.UserID, &it.UserName, &it.UserPhone, &it.UserCity, &it.Source, &it.Status, &it.GrandTotal, &it.CreatedAt); err != nil {
 			return nil, errs.New(errs.Internal, "فشل قراءة صف طلب")
 		}
 		items = append(items, it)
 	}
 	var total int64
-	countQuery := "SELECT COUNT(*) FROM orders" + where
+	countQuery := "SELECT COUNT(*) FROM orders o LEFT JOIN users u ON u.id = o.user_id LEFT JOIN cities c ON c.id = u.city_id" + where
 	if err := db.Stdlib().QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		total = int64(len(items))
 	}
 	return &ListOrdersResponse{Items: items, Total: total, Page: page, Limit: limit}, nil
+}
+
+// ====== Admin: Update Order Status ======
+
+type UpdateOrderStatusRequest struct {
+	Status string  `json:"status"` // pending_payment|paid|processing|shipped|delivered|cancelled|awaiting_admin_refund|refund_required|refunded
+	Notes  *string `json:"notes,omitempty"`
+}
+
+type UpdateOrderStatusResponse struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+//encore:api auth method=POST path=/admin/orders/:id/status
+func (s *Service) UpdateOrderStatus(ctx context.Context, id int64, req *UpdateOrderStatusRequest) (*UpdateOrderStatusResponse, error) {
+	if _, ok := auth.UserID(); !ok {
+		return nil, errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	if !isAdmin() {
+		return nil, errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+	if req == nil || strings.TrimSpace(req.Status) == "" {
+		return nil, errs.New(errs.InvalidArgument, "الحالة مطلوبة")
+	}
+
+	status := strings.ToLower(strings.TrimSpace(req.Status))
+	allowedStatuses := []string{
+		"pending_payment",
+		"paid",
+		"processing",
+		"shipped",
+		"delivered",
+		"cancelled",
+		"awaiting_admin_refund",
+		"refund_required",
+		"refunded",
+	}
+	isValid := false
+	for _, s := range allowedStatuses {
+		if status == s {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		return nil, errs.New(errs.ValidationFailed, "حالة غير مسموحة")
+	}
+
+	// Update order status
+	query := "UPDATE orders SET status = $1, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $2 RETURNING id, status::text"
+	var result UpdateOrderStatusResponse
+	err := db.Stdlib().QueryRowContext(ctx, query, status, id).Scan(&result.ID, &result.Status)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errs.New(errs.NotFound, "الطلب غير موجود")
+		}
+		return nil, errs.New(errs.Internal, "فشل تحديث حالة الطلب")
+	}
+
+	// TODO: Log the status change with notes if provided
+	// This could be added to an audit log table in the future
+
+	return &result, nil
 }
 
 // ====== Admin: Invoices List ======
@@ -1495,7 +1570,7 @@ type ListShipmentsResponse struct {
 
 type CreateShipmentRequest struct {
 	OrderID        int64   `json:"order_id"`
-	DeliveryMethod string  `json:"delivery_method"`           // courier | pickup
+	DeliveryMethod string  `json:"delivery_method"` // courier | pickup
 	CompanyID      *int64  `json:"company_id,omitempty"`
 	TrackingRef    *string `json:"tracking_ref,omitempty"`
 }

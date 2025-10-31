@@ -122,6 +122,20 @@ func (s *Service) ResendVerification(ctx context.Context, req *ResendVerificatio
 	return s.ResendUserVerification(ctx, req)
 }
 
+// RequestPasswordReset initiates password reset flow by sending reset email
+//
+//encore:api public method=POST path=/auth/forgot-password
+func (s *Service) RequestPasswordReset(ctx context.Context, req *RequestPasswordResetRequest) (*RequestPasswordResetResponse, error) {
+	return s.RequestPasswordResetFlow(ctx, req)
+}
+
+// ResetPassword completes password reset using the token from email
+//
+//encore:api public method=POST path=/auth/reset-password
+func (s *Service) ResetPassword(ctx context.Context, req *ResetPasswordRequest) (*ResetPasswordResponse, error) {
+	return s.ResetUserPassword(ctx, req)
+}
+
 // --- helpers ---
 
 func refreshCookieName() string { return "refresh_token" }

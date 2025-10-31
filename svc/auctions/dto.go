@@ -53,6 +53,7 @@ type AuctionResponseDTO struct {
 	ProductID             int64         `json:"product_id"`
 	ProductTitle          string        `json:"product_title"`
 	ProductSlug           string        `json:"product_slug"`
+	ThumbnailURL          *string       `json:"thumbnail_url,omitempty"`
 	StartPrice            float64       `json:"start_price"`
 	BidStep               int           `json:"bid_step"`
 	ReservePrice          *float64      `json:"reserve_price,omitempty"`
@@ -179,6 +180,7 @@ func ToAuctionResponse(auction *AuctionWithDetails) *AuctionResponseDTO {
 		ProductID:             auction.ProductID,
 		ProductTitle:          auction.ProductTitle,
 		ProductSlug:           auction.ProductSlug,
+		ThumbnailURL:          auction.ThumbnailURL,
 		StartPrice:            auction.StartPrice,
 		BidStep:               auction.BidStep,
 		ReservePrice:          auction.ReservePrice,
@@ -363,6 +365,9 @@ type ProcessAuctionEndResponse struct {
 type AuctionResponse struct {
 	ID                    int64     `json:"id"`
 	ProductID             int64     `json:"product_id"`
+	ProductTitle          string    `json:"product_title"`
+	ProductSlug           string    `json:"product_slug"`
+	ThumbnailURL          *string   `json:"thumbnail_url,omitempty"`
 	StartPrice            float64   `json:"start_price"`
 	BidStep               float64   `json:"bid_step"`
 	ReservePrice          *float64  `json:"reserve_price,omitempty"`
@@ -450,6 +455,9 @@ func ToRichAuctionResponse(auction *AuctionWithDetails) *AuctionResponse {
 	response := &AuctionResponse{
 		ID:                    auction.ID,
 		ProductID:             auction.ProductID,
+		ProductTitle:          auction.ProductTitle,
+		ProductSlug:           auction.ProductSlug,
+		ThumbnailURL:          auction.ThumbnailURL,
 		StartPrice:            auction.StartPrice,
 		BidStep:               float64(auction.BidStep),
 		ReservePrice:          auction.ReservePrice,

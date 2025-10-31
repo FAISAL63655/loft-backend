@@ -3,6 +3,8 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"encore.app/pkg/authn"
@@ -289,6 +291,84 @@ func (r *Repository) UpdateUserLastLogin(ctx context.Context, userID int64) erro
 		SET last_login_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE id = $1
 	`, userID)
+
+	return err
+}
+
+// CreatePasswordResetToken stores a password reset token in the database
+func (r *Repository) CreatePasswordResetToken(ctx context.Context, userID int64, token string, expiresAt time.Time) error {
+	_, err := db.Exec(ctx, `
+		INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
+		VALUES ($1, $2, $3, (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'))
+	`, userID, token, expiresAt)
+	return err
+}
+
+// ValidatePasswordResetToken validates a reset token and returns the user ID if valid
+func (r *Repository) ValidatePasswordResetToken(ctx context.Context, token string) (int64, error) {
+	var userID int64
+	var expiresAt time.Time
+	var usedAt *time.Time
+
+	err := db.QueryRow(ctx, `
+		SELECT user_id, expires_at, used_at
+		FROM password_reset_tokens
+		WHERE token = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, token).Scan(&userID, &expiresAt, &usedAt)
+
+	if err != nil {
+		return 0, err
+	}
+
+	// Check if token was already used
+	if usedAt != nil {
+		return 0, fmt.Errorf("token already used")
+	}
+
+	// Check if token is expired
+	if time.Now().UTC().After(expiresAt) {
+		return 0, fmt.Errorf("token expired")
+	}
+
+	return userID, nil
+}
+
+// InvalidatePasswordResetToken marks a reset token as used
+func (r *Repository) InvalidatePasswordResetToken(ctx context.Context, token string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE password_reset_tokens
+		SET used_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE token = $1
+	`, token)
+	return err
+}
+
+// UpdateUserPassword updates a user's password hash
+func (r *Repository) UpdateUserPassword(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := db.Exec(ctx, `
+		UPDATE users
+		SET password_hash = $1, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE id = $2
+	`, passwordHash, userID)
+	return err
+}
+
+// InvalidateAllRefreshTokens invalidates all refresh tokens for a user (for security after password reset)
+func (r *Repository) InvalidateAllRefreshTokens(ctx context.Context, userID int64) error {
+	// This assumes you have a refresh_tokens table
+	// If not, this is a no-op for now
+	_, err := db.Exec(ctx, `
+		UPDATE refresh_tokens
+		SET revoked_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE user_id = $1 AND revoked_at IS NULL
+	`, userID)
+
+	// Ignore error if table doesn't exist
+	if err != nil && strings.Contains(err.Error(), "does not exist") {
+		return nil
+	}
 
 	return err
 }

@@ -3,6 +3,7 @@ package checkout
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 
 	"encore.app/pkg/config"
 	"encore.app/pkg/errs"
+	"encore.app/pkg/moyasar"
+	"encore.app/svc/notifications"
 )
 
 var db = sqldb.Named("coredb")
@@ -21,17 +24,20 @@ type Service struct{}
 
 func initService() (*Service, error) { return &Service{}, nil }
 
-type CheckoutHeaders struct {
-	IdemKey string `header:"Idempotency-Key"`
+type CheckoutRequest struct {
+	AddressID      *int64 `json:"address_id"`
+	IdempotencyKey string `header:"Idempotency-Key"`
 }
 
 type CheckoutResponse struct {
-	InvoiceID int64  `json:"invoice_id"`
-	Status    string `json:"status"`
+	InvoiceID  int64  `json:"invoice_id"`
+	OrderID    int64  `json:"order_id"`
+	Status     string `json:"status"`
+	PaymentURL string `json:"payment_url,omitempty"`
 }
 
 //encore:api auth method=POST path=/checkout
-func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error) {
+func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, error) {
 	uidStr, ok := auth.UserID()
 	if !ok {
 		return nil, &errs.Error{Code: errs.Unauthenticated, Message: "مطلوب تسجيل الدخول"}
@@ -50,7 +56,7 @@ func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error
 		return nil, &errs.Error{Code: "AUTH_EMAIL_VERIFY_REQUIRED_AT_CHECKOUT", Message: "فعّل حسابك لإتمام الشراء"}
 	}
 
-	key := strings.TrimSpace(h.IdemKey)
+	key := strings.TrimSpace(req.IdempotencyKey)
 	if key == "" {
 		return nil, &errs.Error{Code: errs.InvalidArgument, Message: "مطلوب Idempotency-Key"}
 	}
@@ -169,7 +175,120 @@ func Checkout(ctx context.Context, h *CheckoutHeaders) (*CheckoutResponse, error
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل الحفظ"}
 	}
 
-	return &CheckoutResponse{InvoiceID: invoiceID, Status: "unpaid"}, nil
+	// Get order grand total and user info for notifications
+	var totalGross float64
+	var userName, userEmail string
+	if err := db.Stdlib().QueryRowContext(ctx, `
+		SELECT o.grand_total, u.name, u.email
+		FROM orders o
+		JOIN users u ON u.id = o.user_id
+		WHERE o.id = $1
+	`, orderID).Scan(&totalGross, &userName, &userEmail); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل قراءة الإجماليات"}
+	}
+
+	// Notify admins about new order (best-effort, don't fail checkout if notification fails)
+	go func(oid, iid int64, invNum, uName, uEmail string, total float64) {
+		bgCtx := context.Background()
+		// Get all admin users
+		rows, err := db.Stdlib().QueryContext(bgCtx, `SELECT id, name, email FROM users WHERE role = 'admin' AND state = 'active'`)
+		if err != nil {
+			fmt.Printf("Failed to get admin users for order notification: %v\n", err)
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var adminID int64
+			var adminName, adminEmail string
+			if err := rows.Scan(&adminID, &adminName, &adminEmail); err != nil {
+				continue
+			}
+
+			payload := map[string]any{
+				"order_id":       oid,
+				"invoice_id":     iid,
+				"invoice_number": invNum,
+				"user_name":      uName,
+				"user_email":     uEmail,
+				"grand_total":    fmt.Sprintf("%.2f", total),
+				"language":       "ar",
+				"name":           adminName,
+				"email":          adminEmail,
+			}
+
+			// Send internal notification
+			if _, err := notifications.EnqueueInternal(bgCtx, adminID, "new_order_admin", payload); err != nil {
+				fmt.Printf("Failed to send internal notification to admin %d: %v\n", adminID, err)
+			}
+		}
+	}(orderID, invoiceID, invoiceNumber, userName, userEmail, totalGross)
+
+	// Convert to halalas (smallest currency unit)
+	amountHalalas := int(totalGross * 100)
+
+	// Build Moyasar URLs
+	baseURL := "http://localhost:3000" // TODO: Use environment variable
+	successURL := baseURL + "/checkout/callback"
+	backURL := baseURL + "/checkout"
+	callbackURL := baseURL + "/api/moyasar/webhook"
+
+	// Create payment in Moyasar
+	description := fmt.Sprintf("Order #%d - Invoice #%s", orderID, invoiceNumber)
+	metadata := map[string]string{
+		"order_id":   fmt.Sprintf("%d", orderID),
+		"invoice_id": fmt.Sprintf("%d", invoiceID),
+	}
+
+	gatewayRef, paymentURL, err := moyasar.CreateInvoice(
+		amountHalalas,
+		"SAR",
+		description,
+		successURL,
+		backURL,
+		callbackURL,
+		metadata,
+	)
+	if err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الدفع: " + err.Error()}
+	}
+
+	// Create payment record in database (critical for webhook processing)
+	var dbPaymentID int64
+	if err := db.Stdlib().QueryRowContext(ctx, `
+		INSERT INTO payments (invoice_id, gateway, gateway_ref, status, currency, amount_authorized, raw_response) 
+		VALUES ($1, 'moyasar', $2, 'initiated', 'SAR', $3, '{}') 
+		RETURNING id
+	`, invoiceID, gatewayRef, totalGross).Scan(&dbPaymentID); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء سجل الدفع: " + err.Error()}
+	}
+
+	// Update invoice with payment info and set status to payment_in_progress
+	nowUTC := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Stdlib().ExecContext(ctx, `
+		UPDATE invoices 
+		SET status = 'payment_in_progress',
+		    totals = COALESCE(totals, '{}'::jsonb) 
+		             || jsonb_build_object(
+		                'idem_key',       $1::text,
+		                'payment_id',     $2::bigint,
+		                'gateway_ref',    $3::text,
+		                'pay_started_at', $4::text,
+		                'pay_currency',   'SAR',
+		                'pay_amount',     $5::numeric
+		             ),
+		    updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE id = $6
+	`, key, dbPaymentID, gatewayRef, nowUTC, totalGross, invoiceID); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "فشل تحديث الفاتورة: " + err.Error()}
+	}
+
+	return &CheckoutResponse{
+		InvoiceID:  invoiceID,
+		OrderID:    orderID,
+		Status:     "payment_in_progress",
+		PaymentURL: paymentURL,
+	}, nil
 }
 
 func hashKey(s string) uint64 {

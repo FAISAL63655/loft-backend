@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -154,21 +153,6 @@ func IsValidPassword(password string) bool {
 		return false
 	}
 
-	// Check for at least one letter and one number
-	hasLetter := false
-	hasNumber := false
-
-	for _, char := range password {
-		if unicode.IsLetter(char) {
-			hasLetter = true
-		}
-		if unicode.IsDigit(char) {
-			hasNumber = true
-		}
-		if hasLetter && hasNumber {
-			break
-		}
-	}
-
-	return hasLetter && hasNumber
+	// تم تخفيف القيود: فقط 8 أحرف على الأقل، بدون شروط إضافية
+	return true
 }

@@ -193,11 +193,18 @@ type CreateProductRequest struct {
 	Lineage            *string    `json:"lineage,omitempty"`
 	OriginProofURL     *string    `json:"origin_proof_url,omitempty"`
 	OriginProofFileRef *string    `json:"origin_proof_file_ref,omitempty"`
+	Color              *string    `json:"color,omitempty"`
+	Brand              *string    `json:"brand,omitempty"`
 
 	// Supply-specific fields
 	SKU               *string `json:"sku,omitempty"`
 	StockQty          *int    `json:"stock_qty,omitempty"`
 	LowStockThreshold *int    `json:"low_stock_threshold,omitempty"`
+
+	// Media fields (base64 encoded images, YouTube URLs, website URLs)
+	MediaURLs   []string `json:"media_urls,omitempty"`
+	YoutubeURLs []string `json:"youtube_urls,omitempty"`
+	WebsiteURLs []string `json:"website_urls,omitempty"`
 }
 
 // Validate validates the create product request
@@ -254,9 +261,9 @@ type CreateProductResponse struct {
 
 // UpdateProductRequest represents a request to update an existing product
 type UpdateProductRequest struct {
-	Title       *string     `json:"title,omitempty"`
-	Description **string    `json:"description,omitempty"` // Double pointer to allow setting to null
-	PriceNet    *float64    `json:"price_net,omitempty"`
+	Title       *string        `json:"title,omitempty"`
+	Description **string       `json:"description,omitempty"` // Double pointer to allow setting to null
+	PriceNet    *float64       `json:"price_net,omitempty"`
 	Status      *ProductStatus `json:"status,omitempty"`
 
 	// Pigeon-specific fields
@@ -266,11 +273,18 @@ type UpdateProductRequest struct {
 	Lineage            *string    `json:"lineage,omitempty"`
 	OriginProofURL     *string    `json:"origin_proof_url,omitempty"`
 	OriginProofFileRef *string    `json:"origin_proof_file_ref,omitempty"`
+	Color              *string    `json:"color,omitempty"`
+	Brand              *string    `json:"brand,omitempty"`
 
 	// Supply-specific fields
 	SKU               *string `json:"sku,omitempty"`
 	StockQty          *int    `json:"stock_qty,omitempty"`
 	LowStockThreshold *int    `json:"low_stock_threshold,omitempty"`
+
+	// Media fields (base64 encoded images, YouTube URLs, website URLs)
+	MediaURLs   []string `json:"media_urls,omitempty"`
+	YoutubeURLs []string `json:"youtube_urls,omitempty"`
+	WebsiteURLs []string `json:"website_urls,omitempty"`
 }
 
 // Validate validates the update product request
@@ -317,7 +331,8 @@ type UpdateMediaRequest struct {
 	ProductID int64 `json:"product_id"`
 	MediaID   int64 `json:"media_id"`
 
-	ArchivedAt *time.Time `json:"archived_at"` // Set to archive/unarchive
+	Description *string    `json:"description"` // وصف الصورة أو الملف
+	ArchivedAt  *time.Time `json:"archived_at"` // Set to archive/unarchive
 }
 
 // UpdateMediaResponse represents the response after updating media
@@ -344,7 +359,7 @@ func DefaultMediaUploadConfig() MediaUploadConfig {
 		AllowedImageExt:  []string{".jpg", ".jpeg", ".png", ".webp"},
 		AllowedVideoExt:  []string{".mp4"},
 		// Allow common document types: PDF and spreadsheets
-		AllowedDocExt:    []string{".pdf", ".xlsx", ".xls", ".csv"},
+		AllowedDocExt: []string{".pdf", ".xlsx", ".xls", ".csv"},
 	}
 }
 

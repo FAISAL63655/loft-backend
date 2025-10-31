@@ -11,6 +11,7 @@ import (
 	"encore.app/pkg/audit"
 	"encore.app/pkg/config"
 	"encore.app/pkg/errs"
+	"encore.app/pkg/storagegcs"
 	"encore.app/svc/notifications"
 	"encore.app/svc/orders/order_mgmt"
 	"encore.dev/storage/sqldb"
@@ -23,10 +24,11 @@ type Service struct {
 	reserveService   *ReserveService
 	rateLimitService *RateLimitService
 	bidMgmtService   *BidManagementService
+	storage          *storagegcs.Client
 }
 
 // NewService creates a new auction service
-func NewService(db *sqldb.Database) *Service {
+func NewService(db *sqldb.Database, storage *storagegcs.Client) *Service {
 	// Initialize realtime service
 	InitRealtimeService(db)
 
@@ -36,6 +38,7 @@ func NewService(db *sqldb.Database) *Service {
 		reserveService:   NewReserveService(db),
 		rateLimitService: NewRateLimitService(db),
 		bidMgmtService:   NewBidManagementService(db),
+		storage:          storage,
 	}
 
 	// Set the service instance for API endpoints
@@ -189,9 +192,9 @@ func (s *Service) ListAuctions(ctx context.Context, filters *AuctionFilters) ([]
 		return nil, 0, fmt.Errorf("failed to list auctions: %w", err)
 	}
 
-	// Calculate time remaining for live auctions
+	// Calculate time remaining for live auctions and generate signed URLs for thumbnails
 	now := time.Now().UTC()
-	for _, auction := range auctions {
+	for i, auction := range auctions {
 		if auction.Status == AuctionStatusLive {
 			remaining := auction.EndAt.Sub(now)
 			if remaining > 0 {
@@ -204,6 +207,14 @@ func (s *Service) ListAuctions(ctx context.Context, filters *AuctionFilters) ([]
 		if auction.ReservePrice != nil {
 			met := auction.CurrentPrice >= *auction.ReservePrice
 			auction.ReserveMet = &met
+		}
+
+		// Get thumbnail from media table (same logic as catalog service)
+		if s.storage != nil {
+			thumbnailURL, err := s.getProductThumbnail(ctx, auction.ProductID)
+			if err == nil && thumbnailURL != nil {
+				auctions[i].ThumbnailURL = thumbnailURL
+			}
 		}
 	}
 
@@ -350,32 +361,33 @@ func (s *Service) MarkWinnerUnpaid(ctx context.Context, auctionID int64) error {
 
 	return nil
 }
+
 //
 //encore:api private
 func TickAuctions(ctx context.Context) error {
-    s := GetService()
-    fmt.Printf("[AUCTION_TICK] Tick started at %s\n", time.Now().UTC().Format(time.RFC3339))
+	s := GetService()
+	fmt.Printf("[AUCTION_TICK] Tick started at %s\n", time.Now().UTC().Format(time.RFC3339))
 
-    // Prevent overlapping ticks using a Postgres advisory lock
-    // This helps avoid "Step is still running" and ensures only one tick runs at a time.
-    var got bool
-    if err := s.db.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", int64(424242)).Scan(&got); err != nil {
-        fmt.Printf("[AUCTION_TICK] failed to acquire advisory lock: %v\n", err)
-        return err
-    }
-    if !got {
-        fmt.Printf("[AUCTION_TICK] skipped: another tick is running\n")
-        return nil
-    }
-    defer func() {
-        _, _ = s.db.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(424242))
-    }()
+	// Prevent overlapping ticks using a Postgres advisory lock
+	// This helps avoid "Step is still running" and ensures only one tick runs at a time.
+	var got bool
+	if err := s.db.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", int64(424242)).Scan(&got); err != nil {
+		fmt.Printf("[AUCTION_TICK] failed to acquire advisory lock: %v\n", err)
+		return err
+	}
+	if !got {
+		fmt.Printf("[AUCTION_TICK] skipped: another tick is running\n")
+		return nil
+	}
+	defer func() {
+		_, _ = s.db.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(424242))
+	}()
 
 	// Close ended auctions
-	    toClose, err := s.repo.GetAuctionsToClose(ctx)
-    if err == nil {
-        fmt.Printf("[AUCTION_TICK] toClose=%d\n", len(toClose))
-        for _, a := range toClose {
+	toClose, err := s.repo.GetAuctionsToClose(ctx)
+	if err == nil {
+		fmt.Printf("[AUCTION_TICK] toClose=%d\n", len(toClose))
+		for _, a := range toClose {
 			// Re-fetch details to get current price and reserve
 			det, derr := s.repo.GetAuctionWithDetails(ctx, a.ID)
 			if derr != nil {
@@ -409,16 +421,18 @@ func TickAuctions(ctx context.Context) error {
 					// Send notifications to winner (internal + email)
 					var productTitle string
 					_ = s.db.QueryRow(ctx, `SELECT title FROM products WHERE id=$1`, det.ProductID).Scan(&productTitle)
-					if productTitle == "" { productTitle = fmt.Sprintf("المزاد #%d", det.ID) }
+					if productTitle == "" {
+						productTitle = fmt.Sprintf("المزاد #%d", det.ID)
+					}
 					var email, name string
 					_ = s.db.QueryRow(ctx, `SELECT email, name FROM users WHERE id=$1`, winnerUserID).Scan(&email, &name)
-					
+
 					// Get invoice number
 					var invoiceNumber string
 					if orderErr == nil && orderResp != nil {
 						_ = s.db.QueryRow(ctx, `SELECT number FROM invoices WHERE id=$1`, orderResp.InvoiceID).Scan(&invoiceNumber)
 					}
-					
+
 					payload := map[string]interface{}{
 						"auction_id":     fmt.Sprint(det.ID),
 						"product_title":  productTitle,
@@ -434,14 +448,18 @@ func TickAuctions(ctx context.Context) error {
 						payload["invoice_number"] = invoiceNumber
 						payload["payment_url"] = fmt.Sprintf("https://dughairiloft.com/checkout/%d", orderResp.OrderID)
 					}
-					if email != "" { 
-						payload["email"] = email 
+					if email != "" {
+						payload["email"] = email
 						payload["name"] = name
 						payload["Name"] = name // For template compatibility
 					}
-					if name != "" { payload["name"] = name }
+					if name != "" {
+						payload["name"] = name
+					}
 					_, _ = notifications.EnqueueInternal(ctx, winnerUserID, "auction_ended_winner", payload)
-					if email != "" { _, _ = notifications.EnqueueEmail(ctx, winnerUserID, "auction_ended_winner", payload) }
+					if email != "" {
+						_, _ = notifications.EnqueueEmail(ctx, winnerUserID, "auction_ended_winner", payload)
+					}
 				}
 			} else {
 				// No winner: end auction (not cancelled) and return product to available
@@ -473,7 +491,9 @@ func TickAuctions(ctx context.Context) error {
 					if hbUserID != 0 {
 						var productTitle string
 						_ = s.db.QueryRow(ctx, `SELECT title FROM products WHERE id=$1`, det.ProductID).Scan(&productTitle)
-						if productTitle == "" { productTitle = fmt.Sprintf("المزاد #%d", det.ID) }
+						if productTitle == "" {
+							productTitle = fmt.Sprintf("المزاد #%d", det.ID)
+						}
 						var email, name string
 						_ = s.db.QueryRow(ctx, `SELECT email, name FROM users WHERE id=$1`, hbUserID).Scan(&email, &name)
 						payload := map[string]interface{}{
@@ -484,10 +504,16 @@ func TickAuctions(ctx context.Context) error {
 							"highest_bid":   fmt.Sprintf("%.2f", hbAmount),
 							"language":      "ar",
 						}
-						if email != "" { payload["email"] = email }
-						if name != "" { payload["name"] = name }
+						if email != "" {
+							payload["email"] = email
+						}
+						if name != "" {
+							payload["name"] = name
+						}
 						_, _ = notifications.EnqueueInternal(ctx, hbUserID, "auction_ended_reserve_not_met", payload)
-						if email != "" { _, _ = notifications.EnqueueEmail(ctx, hbUserID, "auction_ended_reserve_not_met", payload) }
+						if email != "" {
+							_, _ = notifications.EnqueueEmail(ctx, hbUserID, "auction_ended_reserve_not_met", payload)
+						}
 					}
 				}
 			}
@@ -495,10 +521,10 @@ func TickAuctions(ctx context.Context) error {
 	}
 
 	// Start scheduled auctions whose start_at has passed
-	    toStart, err := s.repo.GetAuctionsToStart(ctx)
-    if err == nil {
-        fmt.Printf("[AUCTION_TICK] toStart=%d\n", len(toStart))
-        for _, a := range toStart {
+	toStart, err := s.repo.GetAuctionsToStart(ctx)
+	if err == nil {
+		fmt.Printf("[AUCTION_TICK] toStart=%d\n", len(toStart))
+		for _, a := range toStart {
 			// Flip to live and mark product in_auction atomically
 			tx, txerr := s.db.Begin(ctx)
 			if txerr != nil {
@@ -630,7 +656,7 @@ func (s *Service) updateProductStatusTx(ctx context.Context, tx *sqldb.Tx, produ
 func (s *Service) sendAuditNotification(ctx context.Context, eventType string, auctionID int64, details map[string]interface{}) {
 	// Enhanced audit notification with proper logging and optional admin notification
 	fmt.Printf("[AUDIT] %s - Auction %d: %+v\n", eventType, auctionID, details)
-	
+
 	// For critical events, also send notification to administrators
 	criticalEvents := map[string]bool{
 		"AUC.CREATED":         true,
@@ -638,7 +664,7 @@ func (s *Service) sendAuditNotification(ctx context.Context, eventType string, a
 		"AUC.ENDED_NO_WINNER": true,
 		"AUC.WINNER_UNPAID":   true,
 	}
-	
+
 	if criticalEvents[eventType] {
 		// Send notification to admin users (role = 'admin')
 		go s.sendAdminAuditNotification(ctx, eventType, auctionID, details)
@@ -695,11 +721,11 @@ func (s *Service) sendWinnerUnpaidNotification(ctx context.Context, auction *Auc
 		WHERE auction_id = $1 
 		ORDER BY amount DESC, created_at DESC 
 		LIMIT 1`
-	
+
 	var winnerUserID int64
 	var winningAmount float64
 	var winnerName string
-	
+
 	err := s.db.QueryRow(ctx, query, auction.ID).Scan(&winnerUserID, &winningAmount, &winnerName)
 	if err != nil {
 		fmt.Printf("Failed to get winner details for unpaid notification: %v\n", err)
@@ -742,11 +768,11 @@ func (s *Service) sendAdminAuditNotification(ctx context.Context, eventType stri
 	defer rows.Close()
 
 	payload := map[string]interface{}{
-		"event_type":  eventType,
-		"auction_id":  fmt.Sprint(auctionID),
-		"details":     details,
-		"timestamp":   time.Now().UTC().Format(time.RFC3339),
-		"language":    "ar",
+		"event_type": eventType,
+		"auction_id": fmt.Sprint(auctionID),
+		"details":    details,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"language":   "ar",
 	}
 
 	for rows.Next() {
@@ -760,4 +786,38 @@ func (s *Service) sendAdminAuditNotification(ctx context.Context, eventType stri
 			fmt.Printf("Failed to send audit notification to admin %d: %v\n", adminUserID, err)
 		}
 	}
+}
+
+// getProductThumbnail retrieves the first image thumbnail for a product
+// This uses the same logic as the catalog service
+func (s *Service) getProductThumbnail(ctx context.Context, productID int64) (*string, error) {
+	// Query to get first image from media table
+	query := `
+		SELECT COALESCE(thumb_path, gcs_path) as path
+		FROM media
+		WHERE product_id = $1 AND kind = 'image' AND archived_at IS NULL
+		ORDER BY created_at ASC
+		LIMIT 1
+	`
+
+	var path sql.NullString
+	err := s.db.QueryRow(ctx, query, productID).Scan(&path)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // No image found
+		}
+		return nil, err
+	}
+
+	if !path.Valid || path.String == "" {
+		return nil, nil
+	}
+
+	// Generate signed URL
+	signedURL, err := s.storage.GetSecureURL(ctx, path.String, 1*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+
+	return &signedURL, nil
 }

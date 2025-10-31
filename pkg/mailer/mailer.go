@@ -3,28 +3,44 @@ package mailer
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"time"
 )
 
-// secrets holds Encore-managed secrets for the mailer integration.
-// The field name (SendGridAPIKey) is the secret key name in Encore Secrets.
+// secrets holds Encore-managed secrets for Mailgun integration.
 var secrets struct {
-	SendGridAPIKey string //encore:secret
+	MailgunAPIKey    string //encore:secret
+	MailgunDomain    string //encore:secret
+	MailgunFromEmail string //encore:secret
+	MailgunFromName  string //encore:secret
 }
 
-// Client provides email sending via SendGrid's v3 HTTP API.
+// Client provides email sending via Mailgun HTTP API.
 type Client struct {
-	httpClient *http.Client
+	apiKey     string
+	domain     string
+	fromEmail  string
+	fromName   string
+	apiBaseURL string
 }
 
-// NewClient constructs a new mailer client.
+// NewClient constructs a new Mailgun mailer client.
 func NewClient() *Client {
-	return &Client{httpClient: &http.Client{Timeout: 10 * time.Second}}
+	// Use EU region for European domains, US region for US domains
+	// The domain will be appended in the Send method
+	apiBase := "https://api.eu.mailgun.net/v3"
+
+	return &Client{
+		apiKey:     secrets.MailgunAPIKey,
+		domain:     secrets.MailgunDomain,
+		fromEmail:  secrets.MailgunFromEmail,
+		fromName:   secrets.MailgunFromName,
+		apiBaseURL: apiBase,
+	}
 }
 
 // Mail represents an email to send.
@@ -38,52 +54,76 @@ type Mail struct {
 	Text      string
 }
 
-// Send sends an email using SendGrid.
+// Send sends an email using Mailgun HTTP API.
 func (c *Client) Send(ctx context.Context, m Mail) error {
-	if secrets.SendGridAPIKey == "" {
-		return errors.New("missing SendGridAPIKey secret")
+	if c.apiKey == "" || c.domain == "" {
+		return errors.New("missing Mailgun API key or domain")
 	}
-	// Log for debugging (remove in production)
-	fmt.Printf("DEBUG: Sending email to %s with subject: %s\n", m.ToEmail, m.Subject)
-	fmt.Printf("DEBUG: Using API key starting with: %s...\n", secrets.SendGridAPIKey[:10])
-	body := map[string]any{
-		"personalizations": []any{
-			map[string]any{
-				"to": []any{map[string]any{"email": m.ToEmail, "name": m.ToName}},
-			},
-		},
-		"from":    map[string]any{"email": m.FromEmail, "name": m.FromName},
-		"subject": m.Subject,
-		"content": []any{
-			map[string]any{"type": "text/plain", "value": m.Text},
-			map[string]any{"type": "text/html", "value": m.HTML},
-		},
+
+	// Use default From if not provided
+	fromEmail := m.FromEmail
+	fromName := m.FromName
+	if fromEmail == "" {
+		fromEmail = c.fromEmail
 	}
-	buf, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.sendgrid.com/v3/mail/send", bytes.NewReader(buf))
+	if fromName == "" {
+		fromName = c.fromName
+	}
+
+	fmt.Printf("📧 Sending email to %s with subject: %s\n", m.ToEmail, m.Subject)
+
+	// Create multipart form
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add form fields
+	writer.WriteField("from", fmt.Sprintf("%s <%s>", fromName, fromEmail))
+	writer.WriteField("to", fmt.Sprintf("%s <%s>", m.ToName, m.ToEmail))
+	writer.WriteField("subject", m.Subject)
+
+	if m.HTML != "" {
+		writer.WriteField("html", m.HTML)
+	}
+	if m.Text != "" {
+		writer.WriteField("text", m.Text)
+	}
+
+	contentType := writer.FormDataContentType()
+	writer.Close()
+
+	// Create HTTP request
+	// Correct URL format: https://api.eu.mailgun.net/v3/{domain}/messages
+	url := fmt.Sprintf("%s/%s/messages", c.apiBaseURL, c.domain)
+	fmt.Printf("🔗 Mailgun API URL: %s\n", url)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", secrets.SendGridAPIKey))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
+
+	// Set headers
+	req.SetBasicAuth("api", c.apiKey)
+	req.Header.Set("Content-Type", contentType)
+
+	// Send request
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to send email: %w", err)
 	}
 	defer resp.Body.Close()
-	
-	// Read response body for debugging
-	var respBody []byte
-	if resp.Body != nil {
-		respBody, _ = io.ReadAll(resp.Body)
+
+	// Read response body
+	body, _ := io.ReadAll(resp.Body)
+
+	// Check response
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("❌ Mailgun error: status=%d, body=%s\n", resp.StatusCode, string(body))
+		return fmt.Errorf("mailgun error: status=%d, body=%s", resp.StatusCode, string(body))
 	}
-	
-	// SendGrid returns 202 on accepted
-	if resp.StatusCode != http.StatusAccepted {
-		fmt.Printf("ERROR: SendGrid API response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
-		return fmt.Errorf("sendgrid error status: %d, body: %s", resp.StatusCode, string(respBody))
-	}
-	fmt.Printf("SUCCESS: Email sent to %s (status: %d)\n", m.ToEmail, resp.StatusCode)
+
+	fmt.Printf("✅ Email sent successfully to %s\n", m.ToEmail)
+	fmt.Printf("📬 Mailgun Response: %s\n", string(body))
+	fmt.Printf("⚠️  If using Sandbox: Make sure %s is authorized at https://app.mailgun.com/mg/sending/domains\n", m.ToEmail)
 	return nil
 }
-

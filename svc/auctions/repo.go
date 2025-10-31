@@ -17,19 +17,19 @@ type Repository struct {
 
 // NewRepository creates a new auction repository
 func NewRepository(db *sqldb.Database) *Repository {
-    return &Repository{db: db}
+	return &Repository{db: db}
 }
 
 // HasActiveAuctionForProduct checks if there's an active (scheduled/live) auction for a product
 func (r *Repository) HasActiveAuctionForProduct(ctx context.Context, productID int64) (bool, error) {
-    var exists bool
-    err := r.db.QueryRow(ctx, `
+	var exists bool
+	err := r.db.QueryRow(ctx, `
         SELECT EXISTS(
             SELECT 1 FROM auctions
             WHERE product_id = $1 AND status IN ('scheduled','live')
         )
     `, productID).Scan(&exists)
-    return exists, err
+	return exists, err
 }
 
 // CreateAuction creates a new auction in the database
@@ -99,17 +99,22 @@ func (r *Repository) GetAuction(ctx context.Context, auctionID int64) (*Auction,
 // GetAuctionWithDetails retrieves an auction with additional details
 func (r *Repository) GetAuctionWithDetails(ctx context.Context, auctionID int64) (*AuctionWithDetails, error) {
 	query := `
-		SELECT 
+		SELECT
 			a.id, a.product_id, a.start_price, a.bid_step, a.reserve_price,
 			a.start_at, a.end_at, a.anti_sniping_minutes, a.status,
 			a.extensions_count, a.max_extensions_override, a.created_at, a.updated_at,
 			p.title as product_title, p.slug as product_slug,
+			(SELECT m.gcs_path
+			 FROM media m
+			 WHERE m.product_id = p.id AND m.kind = 'image' AND m.archived_at IS NULL
+			 ORDER BY m.created_at ASC
+			 LIMIT 1) as thumbnail_url,
 			COALESCE(MAX(b.amount), a.start_price) as current_price,
 			COUNT(b.id) as bids_count,
-			(SELECT u.name FROM bids b2 
-			 JOIN users u ON u.id = b2.user_id 
-			 WHERE b2.auction_id = a.id 
-			 ORDER BY b2.amount DESC, b2.created_at DESC 
+			(SELECT u.name FROM bids b2
+			 JOIN users u ON u.id = b2.user_id
+			 WHERE b2.auction_id = a.id
+			 ORDER BY b2.amount DESC, b2.created_at DESC
 			 LIMIT 1) as highest_bidder,
 			(SELECT c.name_ar FROM bids b3
 			 JOIN users u2 ON u2.id = b3.user_id
@@ -121,10 +126,11 @@ func (r *Repository) GetAuctionWithDetails(ctx context.Context, auctionID int64)
 		JOIN products p ON p.id = a.product_id
 		LEFT JOIN bids b ON b.auction_id = a.id
 		WHERE a.id = $1
-		GROUP BY a.id, p.title, p.slug`
+		GROUP BY a.id, p.id, p.title, p.slug`
 
 	auction := &AuctionWithDetails{}
 	var highestBidder, highestBidderCity sql.NullString
+	var thumbnailURL sql.NullString
 
 	err := r.db.QueryRow(ctx, query, auctionID).Scan(
 		&auction.ID,
@@ -142,6 +148,7 @@ func (r *Repository) GetAuctionWithDetails(ctx context.Context, auctionID int64)
 		&auction.UpdatedAt,
 		&auction.ProductTitle,
 		&auction.ProductSlug,
+		&thumbnailURL,
 		&auction.CurrentPrice,
 		&auction.BidsCount,
 		&highestBidder,
@@ -157,6 +164,9 @@ func (r *Repository) GetAuctionWithDetails(ctx context.Context, auctionID int64)
 	}
 	if highestBidderCity.Valid {
 		auction.HighestBidderCity = &highestBidderCity.String
+	}
+	if thumbnailURL.Valid {
+		auction.ThumbnailURL = &thumbnailURL.String
 	}
 
 	return auction, nil
@@ -222,17 +232,22 @@ func (r *Repository) ListAuctionsWithDetails(ctx context.Context, filters *Aucti
 	// Get auctions
 	offset := (filters.Page - 1) * filters.Limit
 	query := fmt.Sprintf(`
-		SELECT 
+		SELECT
 			a.id, a.product_id, a.start_price, a.bid_step, a.reserve_price,
 			a.start_at, a.end_at, a.anti_sniping_minutes, a.status,
 			a.extensions_count, a.max_extensions_override, a.created_at, a.updated_at,
 			p.title as product_title, p.slug as product_slug,
+			(SELECT m.gcs_path
+			 FROM media m
+			 WHERE m.product_id = p.id AND m.kind = 'image' AND m.archived_at IS NULL
+			 ORDER BY m.created_at ASC
+			 LIMIT 1) as thumbnail_url,
 			COALESCE(MAX(b.amount), a.start_price) as current_price,
 			COUNT(b.id) as bids_count,
-			(SELECT u.name FROM bids b2 
-			 JOIN users u ON u.id = b2.user_id 
-			 WHERE b2.auction_id = a.id 
-			 ORDER BY b2.amount DESC, b2.created_at DESC 
+			(SELECT u.name FROM bids b2
+			 JOIN users u ON u.id = b2.user_id
+			 WHERE b2.auction_id = a.id
+			 ORDER BY b2.amount DESC, b2.created_at DESC
 			 LIMIT 1) as highest_bidder,
 			(SELECT c.name_ar FROM bids b3
 			 JOIN users u2 ON u2.id = b3.user_id
@@ -244,7 +259,7 @@ func (r *Repository) ListAuctionsWithDetails(ctx context.Context, filters *Aucti
 		JOIN products p ON p.id = a.product_id
 		LEFT JOIN bids b ON b.auction_id = a.id
 		%s
-		GROUP BY a.id, p.title, p.slug
+		GROUP BY a.id, p.id, p.title, p.slug
 		%s
 		LIMIT $%d OFFSET $%d`, whereClause, orderBy, argIndex, argIndex+1)
 
@@ -259,7 +274,7 @@ func (r *Repository) ListAuctionsWithDetails(ctx context.Context, filters *Aucti
 	var auctions []*AuctionWithDetails
 	for rows.Next() {
 		auction := &AuctionWithDetails{}
-		var highestBidder, highestBidderCity sql.NullString
+		var highestBidder, highestBidderCity, thumbnailURL sql.NullString
 
 		err := rows.Scan(
 			&auction.ID,
@@ -277,6 +292,7 @@ func (r *Repository) ListAuctionsWithDetails(ctx context.Context, filters *Aucti
 			&auction.UpdatedAt,
 			&auction.ProductTitle,
 			&auction.ProductSlug,
+			&thumbnailURL,
 			&auction.CurrentPrice,
 			&auction.BidsCount,
 			&highestBidder,
@@ -291,6 +307,9 @@ func (r *Repository) ListAuctionsWithDetails(ctx context.Context, filters *Aucti
 		}
 		if highestBidderCity.Valid {
 			auction.HighestBidderCity = &highestBidderCity.String
+		}
+		if thumbnailURL.Valid {
+			auction.ThumbnailURL = &thumbnailURL.String
 		}
 
 		auctions = append(auctions, auction)

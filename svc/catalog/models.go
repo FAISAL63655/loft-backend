@@ -1,9 +1,9 @@
 package catalog
 
 import (
-	"time"
 	"database/sql/driver"
 	"fmt"
+	"time"
 )
 
 // ProductType represents the type of product
@@ -40,11 +40,11 @@ const (
 	ProductStatusArchived  ProductStatus = "archived"
 
 	// Pigeon-only statuses
-	ProductStatusReserved            ProductStatus = "reserved"
-	ProductStatusPaymentInProgress   ProductStatus = "payment_in_progress"
-	ProductStatusInAuction          ProductStatus = "in_auction"
-	ProductStatusAuctionHold        ProductStatus = "auction_hold"
-	ProductStatusSold               ProductStatus = "sold"
+	ProductStatusReserved          ProductStatus = "reserved"
+	ProductStatusPaymentInProgress ProductStatus = "payment_in_progress"
+	ProductStatusInAuction         ProductStatus = "in_auction"
+	ProductStatusAuctionHold       ProductStatus = "auction_hold"
+	ProductStatusSold              ProductStatus = "sold"
 
 	// Supply-only statuses
 	ProductStatusOutOfStock ProductStatus = "out_of_stock"
@@ -78,7 +78,7 @@ func (ps ProductStatus) IsValidForPigeon() bool {
 		ProductStatusSold,
 		ProductStatusArchived,
 	}
-	
+
 	for _, status := range validStatuses {
 		if ps == status {
 			return true
@@ -94,7 +94,7 @@ func (ps ProductStatus) IsValidForSupply() bool {
 		ProductStatusOutOfStock,
 		ProductStatusArchived,
 	}
-	
+
 	for _, status := range validStatuses {
 		if ps == status {
 			return true
@@ -158,43 +158,39 @@ func (mk *MediaKind) Scan(value interface{}) error {
 
 // Product represents a product in the catalog
 type Product struct {
-	ID          int64         `json:"id" db:"id"`
-	Type        ProductType   `json:"type" db:"type"`
-	Title       string        `json:"title" db:"title"`
-	Slug        string        `json:"slug" db:"slug"`
-	Description *string       `json:"description" db:"description"`
-	PriceNet    float64       `json:"price_net" db:"price_net"`
-	Status      ProductStatus `json:"status" db:"status"`
-	CreatedAt   time.Time     `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at" db:"updated_at"`
-	
-	// Related entities (loaded separately)
-	Pigeon *Pigeon `json:"pigeon,omitempty"`
-	Supply *Supply `json:"supply,omitempty"`
-	Media  []Media `json:"media,omitempty"`
+	ID           int64         `json:"id" db:"id"`
+	Type         ProductType   `json:"type" db:"type"`
+	Title        string        `json:"title" db:"title"`
+	Slug         string        `json:"slug" db:"slug"`
+	Description  *string       `json:"description" db:"description"`
+	PriceNet     float64       `json:"price_net" db:"price_net"`
+	Status       ProductStatus `json:"status" db:"status"`
+	ThumbnailURL *string       `json:"thumbnail_url,omitempty" db:"thumbnail_url"`
+	CreatedAt    time.Time     `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time     `json:"updated_at" db:"updated_at"`
 }
 
 // Pigeon represents pigeon-specific details
 type Pigeon struct {
-	ProductID           int64      `json:"product_id" db:"product_id"`
-	RingNumber          string     `json:"ring_number" db:"ring_number"`
-	Sex                 PigeonSex  `json:"sex" db:"sex"`
-	BirthDate           *time.Time `json:"birth_date" db:"birth_date"`
-	Lineage             *string    `json:"lineage" db:"lineage"`
-	OriginProofURL      *string    `json:"origin_proof_url" db:"origin_proof_url"`
-	OriginProofFileRef  *string    `json:"origin_proof_file_ref" db:"origin_proof_file_ref"`
-	CreatedAt           time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at" db:"updated_at"`
+	ProductID          int64      `json:"product_id" db:"product_id"`
+	RingNumber         string     `json:"ring_number" db:"ring_number"`
+	Sex                PigeonSex  `json:"sex" db:"sex"`
+	BirthDate          *time.Time `json:"birth_date" db:"birth_date"`
+	Lineage            *string    `json:"lineage" db:"lineage"`
+	OriginProofURL     *string    `json:"origin_proof_url" db:"origin_proof_url"`
+	OriginProofFileRef *string    `json:"origin_proof_file_ref" db:"origin_proof_file_ref"`
+	CreatedAt          time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // Supply represents supply-specific details
 type Supply struct {
-	ProductID          int64     `json:"product_id" db:"product_id"`
-	SKU                *string   `json:"sku" db:"sku"`
-	StockQty           int       `json:"stock_qty" db:"stock_qty"`
-	LowStockThreshold  int       `json:"low_stock_threshold" db:"low_stock_threshold"`
-	CreatedAt          time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
+	ProductID         int64     `json:"product_id" db:"product_id"`
+	SKU               *string   `json:"sku" db:"sku"`
+	StockQty          int       `json:"stock_qty" db:"stock_qty"`
+	LowStockThreshold int       `json:"low_stock_threshold" db:"low_stock_threshold"`
+	CreatedAt         time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // IsLowStock returns true if the current stock is at or below the threshold
@@ -209,18 +205,19 @@ func (s Supply) IsOutOfStock() bool {
 
 // Media represents media files associated with products
 type Media struct {
-	ID                  int64      `json:"id" db:"id"`
-	ProductID           int64      `json:"product_id" db:"product_id"`
-	Kind                MediaKind  `json:"kind" db:"kind"`
-	GCSPath             string     `json:"gcs_path" db:"gcs_path"`
-	ThumbPath           *string    `json:"thumb_path" db:"thumb_path"`
-	WatermarkApplied    bool       `json:"watermark_applied" db:"watermark_applied"`
-	FileSize            *int64     `json:"file_size" db:"file_size"`
-	MimeType            *string    `json:"mime_type" db:"mime_type"`
-	OriginalFilename    *string    `json:"original_filename" db:"original_filename"`
-	ArchivedAt          *time.Time `json:"archived_at" db:"archived_at"`
-	CreatedAt           time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at" db:"updated_at"`
+	ID               int64      `json:"id" db:"id"`
+	ProductID        int64      `json:"product_id" db:"product_id"`
+	Kind             MediaKind  `json:"kind" db:"kind"`
+	GCSPath          string     `json:"gcs_path" db:"gcs_path"`
+	ThumbPath        *string    `json:"thumb_path" db:"thumb_path"`
+	WatermarkApplied bool       `json:"watermark_applied" db:"watermark_applied"`
+	FileSize         *int64     `json:"file_size" db:"file_size"`
+	MimeType         *string    `json:"mime_type" db:"mime_type"`
+	OriginalFilename *string    `json:"original_filename" db:"original_filename"`
+	Description      *string    `json:"description" db:"description"`
+	ArchivedAt       *time.Time `json:"archived_at" db:"archived_at"`
+	CreatedAt        time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // IsArchived returns true if the media is archived
@@ -230,8 +227,20 @@ func (m Media) IsArchived() bool {
 
 // ProductWithDetails represents a complete product with all its details
 type ProductWithDetails struct {
-	Product
-	Media []Media `json:"media"`
+	ID           int64         `json:"id"`
+	Type         ProductType   `json:"type"`
+	Title        string        `json:"title"`
+	Slug         string        `json:"slug"`
+	Description  *string       `json:"description,omitempty"`
+	PriceNet     float64       `json:"price_net"`
+	PriceGross   float64       `json:"price_gross"`
+	Status       ProductStatus `json:"status"`
+	ThumbnailURL *string       `json:"thumbnail_url,omitempty"`
+	CreatedAt    time.Time     `json:"created_at"`
+	UpdatedAt    time.Time     `json:"updated_at"`
+	Pigeon       *Pigeon       `json:"pigeon,omitempty"`
+	Supply       *Supply       `json:"supply,omitempty"`
+	Media        []Media       `json:"media"`
 }
 
 // GetPriceGross calculates the gross price including VAT
@@ -267,28 +276,28 @@ const (
 
 // ProductQuestion represents a user question on a product
 type ProductQuestion struct {
-	ID          int64          `json:"id" db:"id"`
-	ProductID   int64          `json:"product_id" db:"product_id"`
-	UserID      *int64         `json:"user_id,omitempty" db:"user_id"`
-	Question    string         `json:"question" db:"question"`
-	Answer      *string        `json:"answer,omitempty" db:"answer"`
-	AnsweredBy  *int64         `json:"answered_by,omitempty" db:"answered_by"`
-	Status      QuestionStatus `json:"status" db:"status"`
-	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
-	AnsweredAt  *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
-	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
+	ID         int64          `json:"id" db:"id"`
+	ProductID  int64          `json:"product_id" db:"product_id"`
+	UserID     *int64         `json:"user_id,omitempty" db:"user_id"`
+	Question   string         `json:"question" db:"question"`
+	Answer     *string        `json:"answer,omitempty" db:"answer"`
+	AnsweredBy *int64         `json:"answered_by,omitempty" db:"answered_by"`
+	Status     QuestionStatus `json:"status" db:"status"`
+	CreatedAt  time.Time      `json:"created_at" db:"created_at"`
+	AnsweredAt *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
+	UpdatedAt  time.Time      `json:"updated_at" db:"updated_at"`
 }
 
 // AuctionQuestion represents a user question on an auction
 type AuctionQuestion struct {
-	ID          int64          `json:"id" db:"id"`
-	AuctionID   int64          `json:"auction_id" db:"auction_id"`
-	UserID      *int64         `json:"user_id,omitempty" db:"user_id"`
-	Question    string         `json:"question" db:"question"`
-	Answer      *string        `json:"answer,omitempty" db:"answer"`
-	AnsweredBy  *int64         `json:"answered_by,omitempty" db:"answered_by"`
-	Status      QuestionStatus `json:"status" db:"status"`
-	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
-	AnsweredAt  *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
-	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
+	ID         int64          `json:"id" db:"id"`
+	AuctionID  int64          `json:"auction_id" db:"auction_id"`
+	UserID     *int64         `json:"user_id,omitempty" db:"user_id"`
+	Question   string         `json:"question" db:"question"`
+	Answer     *string        `json:"answer,omitempty" db:"answer"`
+	AnsweredBy *int64         `json:"answered_by,omitempty" db:"answered_by"`
+	Status     QuestionStatus `json:"status" db:"status"`
+	CreatedAt  time.Time      `json:"created_at" db:"created_at"`
+	AnsweredAt *time.Time     `json:"answered_at,omitempty" db:"answered_at"`
+	UpdatedAt  time.Time      `json:"updated_at" db:"updated_at"`
 }

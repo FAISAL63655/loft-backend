@@ -179,8 +179,8 @@ func ListAuctions(ctx context.Context, req *AuctionListFiltersDTO) (*AuctionList
 	// Convert DTO to internal filters
 	filters := ToAuctionFilters(req)
 
-	// Use GetAuctionWithDetails to get rich auction data
-	auctions, total, err := service.repo.ListAuctionsWithDetails(ctx, filters)
+	// Use service to get auctions with computed fields (thumbnail, time remaining, etc.)
+	auctions, total, err := service.ListAuctions(ctx, filters)
 	if err != nil {
 		return nil, err
 	}

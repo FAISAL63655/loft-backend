@@ -5,21 +5,21 @@ import "encore.app/pkg/errs"
 
 // Authentication error codes (AUTH domain)
 const (
-	AuthEmailTaken             = "AUTH_EMAIL_TAKEN"
-	AuthInvalidCredentials     = "AUTH_INVALID_CREDENTIALS"
-	AuthUserNotFound           = "AUTH_USER_NOT_FOUND"
-	AuthUserInactive           = "AUTH_USER_INACTIVE"
-	AuthWeakPassword           = "AUTH_WEAK_PASSWORD"
+	AuthEmailTaken              = "AUTH_EMAIL_TAKEN"
+	AuthInvalidCredentials      = "AUTH_INVALID_CREDENTIALS"
+	AuthUserNotFound            = "AUTH_USER_NOT_FOUND"
+	AuthUserInactive            = "AUTH_USER_INACTIVE"
+	AuthWeakPassword            = "AUTH_WEAK_PASSWORD"
 	AuthInvalidVerificationCode = "AUTH_INVALID_VERIFICATION_CODE"
 	AuthVerificationCodeExpired = "AUTH_VERIFICATION_CODE_EXPIRED"
-	AuthVerificationCodeUsed   = "AUTH_VERIFICATION_CODE_USED"
-	AuthEmailAlreadyVerified   = "AUTH_EMAIL_ALREADY_VERIFIED"
-	AuthInvalidRefreshToken    = "AUTH_INVALID_REFRESH_TOKEN"
-	AuthRateLimitExceeded      = "AUTH_RATE_LIMIT_EXCEEDED"
-	AuthTokenExpired           = "AUTH_TOKEN_EXPIRED"
-	AuthUnauthenticated        = "AUTH_UNAUTHENTICATED"
-	AuthForbidden              = "AUTH_FORBIDDEN"
-	AuthEmailVerifyRequired    = "AUTH_EMAIL_VERIFY_REQUIRED"
+	AuthVerificationCodeUsed    = "AUTH_VERIFICATION_CODE_USED"
+	AuthEmailAlreadyVerified    = "AUTH_EMAIL_ALREADY_VERIFIED"
+	AuthInvalidRefreshToken     = "AUTH_INVALID_REFRESH_TOKEN"
+	AuthRateLimitExceeded       = "AUTH_RATE_LIMIT_EXCEEDED"
+	AuthTokenExpired            = "AUTH_TOKEN_EXPIRED"
+	AuthUnauthenticated         = "AUTH_UNAUTHENTICATED"
+	AuthForbidden               = "AUTH_FORBIDDEN"
+	AuthEmailVerifyRequired     = "AUTH_EMAIL_VERIFY_REQUIRED"
 )
 
 // Authentication error messages
@@ -51,7 +51,7 @@ var (
 	// ErrWeakPassword indicates that the password doesn't meet security requirements
 	ErrWeakPassword = &errs.Error{
 		Code:    AuthWeakPassword,
-		Message: "كلمة المرور يجب أن تكون 8 أحرف على الأقل وتحتوي على أحرف وأرقام",
+		Message: "كلمة المرور يجب أن تكون 8 أحرف على الأقل",
 	}
 
 	// ErrInvalidVerificationCode indicates an invalid verification code

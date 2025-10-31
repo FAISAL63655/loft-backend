@@ -1,9 +1,9 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,7 +159,7 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	// returnURL: where user is redirected after payment (browser redirect from Moyasar)
 	// Include payment_id placeholder - Moyasar will append its own params (id, status, etc)
 	returnURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, req.InvoiceID)
-	
+
 	// callbackURL: same as returnURL - Moyasar uses this for browser redirect after payment completion
 	callbackURL := returnURL
 
@@ -173,11 +173,16 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	gatewayRef, sessionURL, err := moyasar.CreateInvoice(halalas, currency, fmt.Sprintf("invoice:%d", req.InvoiceID), callbackURL, returnURL, webhookURL, map[string]string{"invoice_id": fmt.Sprint(req.InvoiceID)})
 	if err != nil {
 		logger.LogError(ctx, err, "moyasar create invoice failed", logger.Fields{
-			"invoice_id":      req.InvoiceID,
-			"amount_halalas":  halalas,
-			"currency":        currency,
+			"invoice_id":       req.InvoiceID,
+			"amount_halalas":   halalas,
+			"currency":         currency,
 			"payments_enabled": config.GetSettings() != nil && config.GetSettings().PaymentsEnabled,
-			"provider":        func() string { if s := config.GetSettings(); s != nil { return s.PaymentsProvider }; return "" }(),
+			"provider": func() string {
+				if s := config.GetSettings(); s != nil {
+					return s.PaymentsProvider
+				}
+				return ""
+			}(),
 		})
 		return nil, &errs.Error{Code: errs.ServiceUnavailable, Message: "تعذر إنشاء جلسة الدفع"}
 	}
@@ -259,342 +264,472 @@ var _ = pubsub.NewSubscription(PaymentWebhookEvents, "payments-webhook-worker", 
 })
 
 func handlePaymentEvent(ctx context.Context, evt *PaymentEvent) error {
-    receivedAt, _ := time.Parse(time.RFC3339, evt.ReceivedAt)
-    return processWebhook(ctx, evt.GatewayRef, evt.InvoiceID, strings.ToLower(evt.Status), evt.Amount, evt.Captured, evt.Currency, receivedAt)
+	logger.Info(ctx, "handlePaymentEvent begin", logger.Fields{
+		"gateway_ref": evt.GatewayRef,
+		"invoice_id":  evt.InvoiceID,
+		"status":      evt.Status,
+		"amount":      evt.Amount,
+		"captured":    evt.Captured,
+	})
+	receivedAt, _ := time.Parse(time.RFC3339, evt.ReceivedAt)
+	err := processWebhook(ctx, evt.GatewayRef, evt.InvoiceID, strings.ToLower(evt.Status), evt.Amount, evt.Captured, evt.Currency, receivedAt)
+	if err != nil {
+		logger.LogError(ctx, err, "processWebhook failed", logger.Fields{
+			"gateway_ref": evt.GatewayRef,
+			"invoice_id":  evt.InvoiceID,
+		})
+	} else {
+		logger.Info(ctx, "handlePaymentEvent completed successfully", logger.Fields{
+			"gateway_ref": evt.GatewayRef,
+			"invoice_id":  evt.InvoiceID,
+		})
+	}
+	return err
 }
 
 //encore:api public raw method=POST path=/payments/webhook/moyasar
 func MoyasarWebhook(w http.ResponseWriter, r *http.Request) {
-    raw, _ := io.ReadAll(r.Body)
-    // Reset body so we can ParseForm() after reading raw
-    r.Body = io.NopCloser(bytes.NewReader(raw))
-    // Accept multiple possible signature header names
-    sig := r.Header.Get("X-Moyasar-Signature")
+	raw, _ := io.ReadAll(r.Body)
+	// Reset body so we can ParseForm() after reading raw
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	// Accept multiple possible signature header names
+	sig := r.Header.Get("X-Moyasar-Signature")
 	if sig == "" {
 		sig = r.Header.Get("X-Signature")
 	}
 	if sig == "" {
 		sig = r.Header.Get("Signature")
 	}
-	    if sig == "" {
-        sig = r.Header.Get("X-Webhook-Signature")
-    }
-    if sig == "" {
-        sig = r.Header.Get("Moyasar-Signature")
-    }
-    if sig == "" {
-        sig = r.Header.Get("Moyasar-Webhook-Signature")
-    }
-    // In test mode, bypass verification entirely (useful for local dev and sandbox).
-    // Otherwise, accept either header-based HMAC OR payload `secret_token` (per Moyasar docs).
-    if s := config.GetSettings(); !(s != nil && s.PaymentsTestMode) {
-        verified := false
-        // Try header-based HMAC first
-        if strings.TrimSpace(sig) != "" && moyasar.VerifySignature(raw, sig) {
-            verified = true
-        }
-        // If no valid signature header, try payload secret_token
-        if !verified {
-            ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-            var token string
-            if strings.Contains(ct, "application/x-www-form-urlencoded") {
-                if err := r.ParseForm(); err == nil {
-                    token = strings.TrimSpace(r.FormValue("secret_token"))
-                    if token == "" {
-                        token = strings.TrimSpace(r.FormValue("webhook[secret_token]"))
-                    }
-                }
-            } else {
-                var obj map[string]any
-                if err := json.Unmarshal(raw, &obj); err == nil {
-                    if v, ok := obj["secret_token"].(string); ok {
-                        token = strings.TrimSpace(v)
-                    }
-                }
-            }
-            if token != "" && moyasar.VerifySecretToken(token) {
-                verified = true
-            }
-        }
-        if !verified {
-            logger.Info(r.Context(), "moyasar webhook invalid signature", logger.Fields{
-                "sig_present": sig != "",
-                "sig_len":     len(sig),
-                "content_len": len(raw),
-            })
-            w.WriteHeader(http.StatusUnauthorized)
-            _, _ = w.Write([]byte(`{"code":"PAY_WEBHOOK_INVALID_SIGNATURE","message":"invalid signature"}`))
-            return
-        }
-    }
+	if sig == "" {
+		sig = r.Header.Get("X-Webhook-Signature")
+	}
+	if sig == "" {
+		sig = r.Header.Get("Moyasar-Signature")
+	}
+	if sig == "" {
+		sig = r.Header.Get("Moyasar-Webhook-Signature")
+	}
+	// In test mode, bypass verification entirely (useful for local dev and sandbox).
+	// Otherwise, accept either header-based HMAC OR payload `secret_token` (per Moyasar docs).
+	if s := config.GetSettings(); !(s != nil && s.PaymentsTestMode) {
+		verified := false
+		// Try header-based HMAC first
+		if strings.TrimSpace(sig) != "" && moyasar.VerifySignature(raw, sig) {
+			verified = true
+		}
+		// If no valid signature header, try payload secret_token
+		if !verified {
+			ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+			var token string
+			if strings.Contains(ct, "application/x-www-form-urlencoded") {
+				if err := r.ParseForm(); err == nil {
+					token = strings.TrimSpace(r.FormValue("secret_token"))
+					if token == "" {
+						token = strings.TrimSpace(r.FormValue("webhook[secret_token]"))
+					}
+				}
+			} else {
+				var obj map[string]any
+				if err := json.Unmarshal(raw, &obj); err == nil {
+					if v, ok := obj["secret_token"].(string); ok {
+						token = strings.TrimSpace(v)
+					}
+				}
+			}
+			if token != "" && moyasar.VerifySecretToken(token) {
+				verified = true
+			}
+		}
+		if !verified {
+			logger.Info(r.Context(), "moyasar webhook invalid signature", logger.Fields{
+				"sig_present": sig != "",
+				"sig_len":     len(sig),
+				"content_len": len(raw),
+			})
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":"PAY_WEBHOOK_INVALID_SIGNATURE","message":"invalid signature"}`))
+			return
+		}
+	}
 
-    // Parse payload: support both JSON and application/x-www-form-urlencoded
-    var evt moyasarEvent
-    ct := r.Header.Get("Content-Type")
-    parsed := false
-    var invoiceIDFromMeta int64
-    if strings.Contains(strings.ToLower(ct), "application/x-www-form-urlencoded") {
-        // Form-encoded payload (common from Moyasar webhooks)
-        if err := r.ParseForm(); err == nil {
-            evt.ID = r.FormValue("id")
-            evt.Status = r.FormValue("status")
-            evt.Currency = r.FormValue("currency")
-            if a := strings.TrimSpace(r.FormValue("amount")); a != "" {
-                if v, err := strconv.ParseInt(a, 10, 64); err == nil { evt.Amount = v }
-            }
-            if c := strings.TrimSpace(r.FormValue("captured")); c != "" {
-                if v, err := strconv.ParseInt(c, 10, 64); err == nil { evt.Captured = v }
-            }
-            // Try nested data[...] keys
-            if evt.ID == "" { evt.ID = r.FormValue("data[id]") }
-            if evt.Status == "" { evt.Status = r.FormValue("data[status]") }
-            if evt.Currency == "" { evt.Currency = r.FormValue("data[currency]") }
-            if evt.Amount == 0 {
-                if a := strings.TrimSpace(r.FormValue("data[amount]")); a != "" {
-                    if v, err := strconv.ParseInt(a, 10, 64); err == nil { evt.Amount = v }
-                }
-            }
-            if evt.Captured == 0 {
-                if c := strings.TrimSpace(r.FormValue("data[captured]")); c != "" {
-                    if v, err := strconv.ParseInt(c, 10, 64); err == nil { evt.Captured = v }
-                }
-            }
-            // Extract metadata invoice_id if provided as metadata[invoice_id] or invoice_id
-            if inv := strings.TrimSpace(r.FormValue("metadata[invoice_id]")); inv != "" {
-                if v, err := strconv.ParseInt(inv, 10, 64); err == nil { invoiceIDFromMeta = v }
-            }
-            if invoiceIDFromMeta == 0 {
-                if inv := strings.TrimSpace(r.FormValue("invoice_id")); inv != "" {
-                    if v, err := strconv.ParseInt(inv, 10, 64); err == nil { invoiceIDFromMeta = v }
-                }
-            }
-            if invoiceIDFromMeta == 0 {
-                if inv := strings.TrimSpace(r.FormValue("data[metadata][invoice_id]")); inv != "" {
-                    if v, err := strconv.ParseInt(inv, 10, 64); err == nil { invoiceIDFromMeta = v }
-                }
-            }
-            // Derive invoice id from description "invoice:<id>" if metadata missing
-            if invoiceIDFromMeta == 0 {
-                desc := strings.TrimSpace(r.FormValue("description"))
-                if desc == "" { desc = strings.TrimSpace(r.FormValue("data[description]")) }
-                if strings.HasPrefix(strings.ToLower(desc), "invoice:") {
-                    if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(desc, "invoice:")), 10, 64); err == nil { invoiceIDFromMeta = v }
-                }
-            }
-            // Some providers wrap JSON in a 'payload' field; try to parse it
-            if p := strings.TrimSpace(r.FormValue("payload")); p != "" && evt.ID == "" {
-                var t map[string]any
-                if err := json.Unmarshal([]byte(p), &t); err == nil {
-                    if dm, ok := t["data"].(map[string]any); ok {
-                        if v, ok := dm["id"].(string); ok { evt.ID = v }
-                        if v, ok := dm["status"].(string); ok && evt.Status == "" { evt.Status = v }
-                        if v, ok := dm["currency"].(string); ok && evt.Currency == "" { evt.Currency = v }
-                        if v, ok := dm["amount"].(float64); ok && evt.Amount == 0 { evt.Amount = int64(v) }
-                        if v, ok := dm["captured"].(float64); ok && evt.Captured == 0 { evt.Captured = int64(v) }
-                        if m, ok := dm["metadata"].(map[string]any); ok && invoiceIDFromMeta == 0 {
-                            if inv, ok := m["invoice_id"]; ok {
-                                switch t := inv.(type) { case string:
-                                    if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil { invoiceIDFromMeta = v }
-                                case float64:
-                                    invoiceIDFromMeta = int64(t)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            parsed = true
-        }
-    }
-    if !parsed {
-        _ = json.Unmarshal(raw, &evt)
-        // Try to parse metadata.invoice_id from JSON
-        var rawMap map[string]any
-        if err := json.Unmarshal(raw, &rawMap); err == nil {
-            // If event envelope has data{...}
-            if dm, ok := rawMap["data"].(map[string]any); ok {
-                if evt.ID == "" { if v, ok := dm["id"].(string); ok { evt.ID = v } }
-                if evt.Status == "" { if v, ok := dm["status"].(string); ok { evt.Status = v } }
-                if evt.Currency == "" { if v, ok := dm["currency"].(string); ok { evt.Currency = v } }
-                if evt.Amount == 0 { if v, ok := dm["amount"].(float64); ok { evt.Amount = int64(v) } }
-                if evt.Captured == 0 { if v, ok := dm["captured"].(float64); ok { evt.Captured = int64(v) } }
-                if m, ok := dm["metadata"].(map[string]any); ok {
-                    if invoiceIDFromMeta == 0 {
-                        if inv, ok := m["invoice_id"]; ok {
-                            switch t := inv.(type) {
-                            case string:
-                                if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil { invoiceIDFromMeta = v }
-                            case float64:
-                                invoiceIDFromMeta = int64(t)
-                            }
-                        }
-                    }
-                }
-                if invoiceIDFromMeta == 0 {
-                    if d, ok := dm["description"].(string); ok {
-                        if strings.HasPrefix(strings.ToLower(d), "invoice:") {
-                            if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(d, "invoice:")), 10, 64); err == nil { invoiceIDFromMeta = v }
-                        }
-                    }
-                }
-            }
-            // look for metadata.invoice_id or invoice_id at top-level
-            if m, ok := rawMap["metadata"].(map[string]any); ok {
-                if inv, ok := m["invoice_id"]; ok {
-                    switch t := inv.(type) {
-                    case string:
-                        if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil { invoiceIDFromMeta = v }
-                    case float64:
-                        invoiceIDFromMeta = int64(t)
-                    }
-                }
-            }
-            if invoiceIDFromMeta == 0 {
-                if inv, ok := rawMap["invoice_id"]; ok {
-                    switch t := inv.(type) {
-                    case string:
-                        if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil { invoiceIDFromMeta = v }
-                    case float64:
-                        invoiceIDFromMeta = int64(t)
-                    }
-                }
-            }
-            if invoiceIDFromMeta == 0 {
-                if d, ok := rawMap["description"].(string); ok {
-                    if strings.HasPrefix(strings.ToLower(d), "invoice:") {
-                        if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(d, "invoice:")), 10, 64); err == nil { invoiceIDFromMeta = v }
-                    }
-                }
-            }
-            // If status still empty, try mapping from event 'type'
-            if evt.Status == "" {
-                if typ, ok := rawMap["type"].(string); ok {
-                    lt := strings.ToLower(typ)
-                    switch {
-                    case strings.Contains(lt, "captured"), strings.Contains(lt, "paid"), strings.Contains(lt, "succeeded"):
-                        evt.Status = "paid"
-                    case strings.Contains(lt, "authorized"):
-                        evt.Status = "authorized"
-                    case strings.Contains(lt, "failed"), strings.Contains(lt, "void"):
-                        evt.Status = "failed"
-                    }
-                }
-            }
-        }
-    }
+	// Parse payload: support both JSON and application/x-www-form-urlencoded
+	var evt moyasarEvent
+	ct := r.Header.Get("Content-Type")
+	parsed := false
+	var invoiceIDFromMeta int64
+	if strings.Contains(strings.ToLower(ct), "application/x-www-form-urlencoded") {
+		// Form-encoded payload (common from Moyasar webhooks)
+		if err := r.ParseForm(); err == nil {
+			evt.ID = r.FormValue("id")
+			evt.Status = r.FormValue("status")
+			evt.Currency = r.FormValue("currency")
+			if a := strings.TrimSpace(r.FormValue("amount")); a != "" {
+				if v, err := strconv.ParseInt(a, 10, 64); err == nil {
+					evt.Amount = v
+				}
+			}
+			if c := strings.TrimSpace(r.FormValue("captured")); c != "" {
+				if v, err := strconv.ParseInt(c, 10, 64); err == nil {
+					evt.Captured = v
+				}
+			}
+			// Try nested data[...] keys
+			if evt.ID == "" {
+				evt.ID = r.FormValue("data[id]")
+			}
+			if evt.Status == "" {
+				evt.Status = r.FormValue("data[status]")
+			}
+			if evt.Currency == "" {
+				evt.Currency = r.FormValue("data[currency]")
+			}
+			if evt.Amount == 0 {
+				if a := strings.TrimSpace(r.FormValue("data[amount]")); a != "" {
+					if v, err := strconv.ParseInt(a, 10, 64); err == nil {
+						evt.Amount = v
+					}
+				}
+			}
+			if evt.Captured == 0 {
+				if c := strings.TrimSpace(r.FormValue("data[captured]")); c != "" {
+					if v, err := strconv.ParseInt(c, 10, 64); err == nil {
+						evt.Captured = v
+					}
+				}
+			}
+			// Extract metadata invoice_id if provided as metadata[invoice_id] or invoice_id
+			if inv := strings.TrimSpace(r.FormValue("metadata[invoice_id]")); inv != "" {
+				if v, err := strconv.ParseInt(inv, 10, 64); err == nil {
+					invoiceIDFromMeta = v
+				}
+			}
+			if invoiceIDFromMeta == 0 {
+				if inv := strings.TrimSpace(r.FormValue("invoice_id")); inv != "" {
+					if v, err := strconv.ParseInt(inv, 10, 64); err == nil {
+						invoiceIDFromMeta = v
+					}
+				}
+			}
+			if invoiceIDFromMeta == 0 {
+				if inv := strings.TrimSpace(r.FormValue("data[metadata][invoice_id]")); inv != "" {
+					if v, err := strconv.ParseInt(inv, 10, 64); err == nil {
+						invoiceIDFromMeta = v
+					}
+				}
+			}
+			// Derive invoice id from description "invoice:<id>" or "Invoice #INV-YYYY-NNNNNN" if metadata missing
+			if invoiceIDFromMeta == 0 {
+				desc := strings.TrimSpace(r.FormValue("description"))
+				if desc == "" {
+					desc = strings.TrimSpace(r.FormValue("data[description]"))
+				}
+				if strings.HasPrefix(strings.ToLower(desc), "invoice:") {
+					if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(desc, "invoice:")), 10, 64); err == nil {
+						invoiceIDFromMeta = v
+					}
+				}
+				// Try to extract from "Invoice #INV-YYYY-NNNNNN" format
+				if invoiceIDFromMeta == 0 && strings.Contains(desc, "Invoice #INV-") {
+					parts := strings.Split(desc, "Invoice #INV-")
+					if len(parts) > 1 {
+						invNum := strings.TrimSpace(parts[1])
+						// invNum is like "2025-000030" or "2025-000030..."
+						invNum = strings.Split(invNum, " ")[0] // Take first part before space
+						// Query database to find invoice by number
+						var invID int64
+						if err := db.Stdlib().QueryRowContext(r.Context(), `SELECT id FROM invoices WHERE number=$1`, "INV-"+invNum).Scan(&invID); err == nil {
+							invoiceIDFromMeta = invID
+						}
+					}
+				}
+			}
+			// Some providers wrap JSON in a 'payload' field; try to parse it
+			if p := strings.TrimSpace(r.FormValue("payload")); p != "" && evt.ID == "" {
+				var t map[string]any
+				if err := json.Unmarshal([]byte(p), &t); err == nil {
+					if dm, ok := t["data"].(map[string]any); ok {
+						if v, ok := dm["id"].(string); ok {
+							evt.ID = v
+						}
+						if v, ok := dm["status"].(string); ok && evt.Status == "" {
+							evt.Status = v
+						}
+						if v, ok := dm["currency"].(string); ok && evt.Currency == "" {
+							evt.Currency = v
+						}
+						if v, ok := dm["amount"].(float64); ok && evt.Amount == 0 {
+							evt.Amount = int64(v)
+						}
+						if v, ok := dm["captured"].(float64); ok && evt.Captured == 0 {
+							evt.Captured = int64(v)
+						}
+						if m, ok := dm["metadata"].(map[string]any); ok && invoiceIDFromMeta == 0 {
+							if inv, ok := m["invoice_id"]; ok {
+								switch t := inv.(type) {
+								case string:
+									if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
+										invoiceIDFromMeta = v
+									}
+								case float64:
+									invoiceIDFromMeta = int64(t)
+								}
+							}
+						}
+					}
+				}
+			}
+			parsed = true
+		}
+	}
+	if !parsed {
+		_ = json.Unmarshal(raw, &evt)
+		// Try to parse metadata.invoice_id from JSON
+		var rawMap map[string]any
+		if err := json.Unmarshal(raw, &rawMap); err == nil {
+			// If event envelope has data{...}
+			if dm, ok := rawMap["data"].(map[string]any); ok {
+				if evt.ID == "" {
+					if v, ok := dm["id"].(string); ok {
+						evt.ID = v
+					}
+				}
+				if evt.Status == "" {
+					if v, ok := dm["status"].(string); ok {
+						evt.Status = v
+					}
+				}
+				if evt.Currency == "" {
+					if v, ok := dm["currency"].(string); ok {
+						evt.Currency = v
+					}
+				}
+				if evt.Amount == 0 {
+					if v, ok := dm["amount"].(float64); ok {
+						evt.Amount = int64(v)
+					}
+				}
+				if evt.Captured == 0 {
+					if v, ok := dm["captured"].(float64); ok {
+						evt.Captured = int64(v)
+					}
+				}
+				if m, ok := dm["metadata"].(map[string]any); ok {
+					if invoiceIDFromMeta == 0 {
+						if inv, ok := m["invoice_id"]; ok {
+							switch t := inv.(type) {
+							case string:
+								if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
+									invoiceIDFromMeta = v
+								}
+							case float64:
+								invoiceIDFromMeta = int64(t)
+							}
+						}
+					}
+				}
+				if invoiceIDFromMeta == 0 {
+					if d, ok := dm["description"].(string); ok {
+						if strings.HasPrefix(strings.ToLower(d), "invoice:") {
+							if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(d, "invoice:")), 10, 64); err == nil {
+								invoiceIDFromMeta = v
+							}
+						}
+						// Try to extract from "Invoice #INV-YYYY-NNNNNN" format
+						if invoiceIDFromMeta == 0 && strings.Contains(d, "Invoice #INV-") {
+							parts := strings.Split(d, "Invoice #INV-")
+							if len(parts) > 1 {
+								invNum := strings.TrimSpace(parts[1])
+								invNum = strings.Split(invNum, " ")[0]
+								var invID int64
+								if err := db.Stdlib().QueryRowContext(r.Context(), `SELECT id FROM invoices WHERE number=$1`, "INV-"+invNum).Scan(&invID); err == nil {
+									invoiceIDFromMeta = invID
+								}
+							}
+						}
+					}
+				}
+			}
+			// look for metadata.invoice_id or invoice_id at top-level
+			if m, ok := rawMap["metadata"].(map[string]any); ok {
+				if inv, ok := m["invoice_id"]; ok {
+					switch t := inv.(type) {
+					case string:
+						if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
+							invoiceIDFromMeta = v
+						}
+					case float64:
+						invoiceIDFromMeta = int64(t)
+					}
+				}
+			}
+			if invoiceIDFromMeta == 0 {
+				if inv, ok := rawMap["invoice_id"]; ok {
+					switch t := inv.(type) {
+					case string:
+						if v, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64); err == nil {
+							invoiceIDFromMeta = v
+						}
+					case float64:
+						invoiceIDFromMeta = int64(t)
+					}
+				}
+			}
+			if invoiceIDFromMeta == 0 {
+				if d, ok := rawMap["description"].(string); ok {
+					if strings.HasPrefix(strings.ToLower(d), "invoice:") {
+						if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(d, "invoice:")), 10, 64); err == nil {
+							invoiceIDFromMeta = v
+						}
+					}
+					// Try to extract from "Invoice #INV-YYYY-NNNNNN" format
+					if invoiceIDFromMeta == 0 && strings.Contains(d, "Invoice #INV-") {
+						parts := strings.Split(d, "Invoice #INV-")
+						if len(parts) > 1 {
+							invNum := strings.TrimSpace(parts[1])
+							invNum = strings.Split(invNum, " ")[0]
+							var invID int64
+							if err := db.Stdlib().QueryRowContext(r.Context(), `SELECT id FROM invoices WHERE number=$1`, "INV-"+invNum).Scan(&invID); err == nil {
+								invoiceIDFromMeta = invID
+							}
+						}
+					}
+				}
+			}
+			// If status still empty, try mapping from event 'type'
+			if evt.Status == "" {
+				if typ, ok := rawMap["type"].(string); ok {
+					lt := strings.ToLower(typ)
+					switch {
+					case strings.Contains(lt, "captured"), strings.Contains(lt, "paid"), strings.Contains(lt, "succeeded"):
+						evt.Status = "paid"
+					case strings.Contains(lt, "authorized"):
+						evt.Status = "authorized"
+					case strings.Contains(lt, "failed"), strings.Contains(lt, "void"):
+						evt.Status = "failed"
+					}
+				}
+			}
+		}
+	}
 
-    gatewayRef := strings.TrimSpace(evt.ID)
+	gatewayRef := strings.TrimSpace(evt.ID)
 
-    // Persist raw payload for diagnostics (store as JSONB object with raw text & content-type)
-    if gatewayRef != "" {
-        _, _ = db.Stdlib().ExecContext(r.Context(),
-            `UPDATE payments SET raw_response = jsonb_build_object('raw', $1::text, 'ct', $2::text), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE gateway_ref=$3`,
-            string(raw), ct, gatewayRef,
-        )
-    }
-    if gatewayRef == "" && invoiceIDFromMeta > 0 {
-        // Fallback: attach raw_response to the most recent pending/initiated payment for this invoice (via subquery)
-        _, _ = db.Stdlib().ExecContext(r.Context(),
-            `UPDATE payments SET raw_response = jsonb_build_object('raw', $1::text, 'ct', $2::text), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+	// Persist raw payload for diagnostics (store as JSONB object with raw text & content-type)
+	if gatewayRef != "" {
+		_, _ = db.Stdlib().ExecContext(r.Context(),
+			`UPDATE payments SET raw_response = jsonb_build_object('raw', $1::text, 'ct', $2::text), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE gateway_ref=$3`,
+			string(raw), ct, gatewayRef,
+		)
+	}
+	if gatewayRef == "" && invoiceIDFromMeta > 0 {
+		// Fallback: attach raw_response to the most recent pending/initiated payment for this invoice (via subquery)
+		_, _ = db.Stdlib().ExecContext(r.Context(),
+			`UPDATE payments SET raw_response = jsonb_build_object('raw', $1::text, 'ct', $2::text), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
              WHERE id = (
                SELECT id FROM payments 
                WHERE invoice_id=$3 AND status IN ('initiated','pending') AND gateway='moyasar'
                ORDER BY created_at DESC
                LIMIT 1
              )`,
-            string(raw), ct, invoiceIDFromMeta,
-        )
-    }
+			string(raw), ct, invoiceIDFromMeta,
+		)
+	}
 
-    if gatewayRef == "" {
-        // No actionable id – acknowledge to avoid retries but do nothing
-        w.WriteHeader(http.StatusOK)
-        _, _ = w.Write([]byte("{}"))
-        return
-    }
+	if gatewayRef == "" {
+		// No actionable id – acknowledge to avoid retries but do nothing
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+		return
+	}
 
-    // If no payment row has this gateway_ref yet, try to claim the pending payment for invoice and set its gateway_ref now
-    if invoiceIDFromMeta > 0 {
-        logger.Info(r.Context(), "attach gateway_ref by invoice fallback attempt", logger.Fields{
-            "invoice_id": invoiceIDFromMeta,
-            "gateway_ref": gatewayRef,
-        })
-        res, err := db.Stdlib().ExecContext(r.Context(),
-            `UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+	// If no payment row has this gateway_ref yet, try to claim the pending payment for invoice and set its gateway_ref now
+	if invoiceIDFromMeta > 0 {
+		logger.Info(r.Context(), "attach gateway_ref by invoice fallback attempt", logger.Fields{
+			"invoice_id":  invoiceIDFromMeta,
+			"gateway_ref": gatewayRef,
+		})
+		res, err := db.Stdlib().ExecContext(r.Context(),
+			`UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
              WHERE id = (
                SELECT id FROM payments 
                WHERE invoice_id=$2 AND gateway='moyasar' AND status IN ('initiated','pending') AND (gateway_ref IS NULL OR gateway_ref='')
                ORDER BY created_at DESC
                LIMIT 1
              )`,
-            gatewayRef, invoiceIDFromMeta,
-        )
-        if err != nil {
-            logger.LogError(r.Context(), err, "attach gateway_ref by invoice fallback failed", logger.Fields{
-                "invoice_id": invoiceIDFromMeta,
-                "gateway_ref": gatewayRef,
-            })
-            return
-        }
-        rows, _ := res.RowsAffected()
-        if rows > 0 {
-            logger.Info(r.Context(), "attached gateway_ref by invoice fallback", logger.Fields{
-                "invoice_id": invoiceIDFromMeta,
-                "gateway_ref": gatewayRef,
-            })
-        }
-    }
+			gatewayRef, invoiceIDFromMeta,
+		)
+		if err != nil {
+			logger.LogError(r.Context(), err, "attach gateway_ref by invoice fallback failed", logger.Fields{
+				"invoice_id":  invoiceIDFromMeta,
+				"gateway_ref": gatewayRef,
+			})
+			return
+		}
+		rows, _ := res.RowsAffected()
+		if rows > 0 {
+			logger.Info(r.Context(), "attached gateway_ref by invoice fallback", logger.Fields{
+				"invoice_id":  invoiceIDFromMeta,
+				"gateway_ref": gatewayRef,
+			})
+		}
+	}
 
-    // Log parsed summary for diagnostics (no secrets)
-    logger.Info(r.Context(), "moyasar webhook parsed", logger.Fields{
-        "ct": ct,
-        "evt_id": evt.ID,
-        "status": evt.Status,
-        "amount": evt.Amount,
-        "captured": evt.Captured,
-        "currency": evt.Currency,
-        "inv_meta": invoiceIDFromMeta,
-    })
+	// Log parsed summary for diagnostics (no secrets)
+	logger.Info(r.Context(), "moyasar webhook parsed", logger.Fields{
+		"ct":       ct,
+		"evt_id":   evt.ID,
+		"status":   evt.Status,
+		"amount":   evt.Amount,
+		"captured": evt.Captured,
+		"currency": evt.Currency,
+		"inv_meta": invoiceIDFromMeta,
+		"raw_body_preview": func() string {
+			if len(raw) > 500 {
+				return string(raw[:500]) + "..."
+			}
+			return string(raw)
+		}(),
+	})
 
-    pe := &PaymentEvent{
-        GatewayRef: gatewayRef,
-        Status:     strings.ToLower(strings.TrimSpace(evt.Status)),
-        Amount:     evt.Amount,
-        Captured:   evt.Captured,
-        Currency:   strings.ToUpper(strings.TrimSpace(evt.Currency)),
-        ReceivedAt: time.Now().UTC().Format(time.RFC3339),
-        InvoiceID:  invoiceIDFromMeta,
-    }
-    _, _ = PaymentWebhookEvents.Publish(r.Context(), pe)
+	pe := &PaymentEvent{
+		GatewayRef: gatewayRef,
+		Status:     strings.ToLower(strings.TrimSpace(evt.Status)),
+		Amount:     evt.Amount,
+		Captured:   evt.Captured,
+		Currency:   strings.ToUpper(strings.TrimSpace(evt.Currency)),
+		ReceivedAt: time.Now().UTC().Format(time.RFC3339),
+		InvoiceID:  invoiceIDFromMeta,
+	}
+	_, _ = PaymentWebhookEvents.Publish(r.Context(), pe)
 
-    w.WriteHeader(http.StatusOK)
-    _, _ = w.Write([]byte("{}"))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("{}"))
 }
 
 func processWebhook(ctx context.Context, gatewayRef string, invoiceIDHint int64, status string, amount, captured int64, currency string, now time.Time) error {
-    logger.Info(ctx, "processWebhook begin", logger.Fields{
-        "gateway_ref": gatewayRef,
-        "invoice_hint": invoiceIDHint,
-        "status": status,
-        "amount": amount,
-        "captured": captured,
-        "currency": currency,
-    })
-    // Post-commit notification data (if order transitions to paid)
-    var notifyPaid bool
-    var notifOrderID int64
-    var notifInvoiceID int64
-    var notifGrandTotal float64
-    var notifBuyerName, notifBuyerEmail string
+	logger.Info(ctx, "processWebhook begin", logger.Fields{
+		"gateway_ref":  gatewayRef,
+		"invoice_hint": invoiceIDHint,
+		"status":       status,
+		"amount":       amount,
+		"captured":     captured,
+		"currency":     currency,
+	})
+	// Post-commit notification data (if order transitions to paid)
+	var notifyPaid bool
+	var notifOrderID int64
+	var notifInvoiceID int64
+	var notifGrandTotal float64
+	var notifBuyerName, notifBuyerEmail string
 
-    err := withTx(ctx, func(tx *sql.Tx) error {
-        var paymentID, invoiceID int64
-        var currentStatus string
-        err := tx.QueryRowContext(ctx, `SELECT id, invoice_id, status::text FROM payments WHERE gateway_ref=$1 FOR UPDATE`, gatewayRef).Scan(&paymentID, &invoiceID, &currentStatus)
-        if err == sql.ErrNoRows {
-            if invoiceIDHint > 0 {
-                // Fallback: claim latest initiated/pending payment by invoice id
-                err = tx.QueryRowContext(ctx, `
+	err := withTx(ctx, func(tx *sql.Tx) error {
+		var paymentID, invoiceID int64
+		var currentStatus string
+		err := tx.QueryRowContext(ctx, `SELECT id, invoice_id, status::text FROM payments WHERE gateway_ref=$1 FOR UPDATE`, gatewayRef).Scan(&paymentID, &invoiceID, &currentStatus)
+		if err == sql.ErrNoRows {
+			if invoiceIDHint > 0 {
+				// Fallback: claim latest initiated/pending payment by invoice id
+				err = tx.QueryRowContext(ctx, `
                     SELECT id, invoice_id, status::text
                     FROM payments
                     WHERE invoice_id=$1 AND gateway='moyasar' AND status IN ('initiated','pending')
@@ -602,31 +737,34 @@ func processWebhook(ctx context.Context, gatewayRef string, invoiceIDHint int64,
                     LIMIT 1
                     FOR UPDATE
                 `, invoiceIDHint).Scan(&paymentID, &invoiceID, &currentStatus)
-                if err == sql.ErrNoRows {
-                    return nil
-                }
-                if err != nil {
-                    return err
-                }
-                // Attach gateway_ref now to ensure idempotency for subsequent events
-                logger.Info(ctx, "attach gateway_ref by invoice fallback attempt", logger.Fields{
-                    "invoice_id": invoiceIDHint,
-                    "gateway_ref": gatewayRef,
-                })
-                _, err = tx.ExecContext(ctx, `UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$2 AND (gateway_ref IS NULL OR gateway_ref='')`, gatewayRef, paymentID)
-                if err != nil {
-                    logger.LogError(ctx, err, "attach gateway_ref by invoice fallback failed", logger.Fields{
-                        "payment_id": paymentID,
-                        "invoice_id": invoiceID,
-                        "gateway_ref": gatewayRef,
-                    })
-                    return err
-                }
-            } else {
-                // Final fallback: match by amount/currency among latest initiated/pending payments
-                // Convert amount halalas -> SAR float
-                sar := float64(amount) / 100.0
-                err = tx.QueryRowContext(ctx, `
+				if err == sql.ErrNoRows {
+					logger.Info(ctx, "no payment found for invoice (early exit)", logger.Fields{
+						"invoice_id": invoiceIDHint,
+					})
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				// Attach gateway_ref now to ensure idempotency for subsequent events
+				logger.Info(ctx, "attach gateway_ref by invoice fallback attempt", logger.Fields{
+					"invoice_id":  invoiceIDHint,
+					"gateway_ref": gatewayRef,
+				})
+				_, err = tx.ExecContext(ctx, `UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$2 AND (gateway_ref IS NULL OR gateway_ref='')`, gatewayRef, paymentID)
+				if err != nil {
+					logger.LogError(ctx, err, "attach gateway_ref by invoice fallback failed", logger.Fields{
+						"payment_id":  paymentID,
+						"invoice_id":  invoiceID,
+						"gateway_ref": gatewayRef,
+					})
+					return err
+				}
+			} else {
+				// Final fallback: match by amount/currency among latest initiated/pending payments
+				// Convert amount halalas -> SAR float
+				sar := float64(amount) / 100.0
+				err = tx.QueryRowContext(ctx, `
                     SELECT p.id, p.invoice_id, p.status::text
                     FROM payments p
                     JOIN invoices i ON i.id = p.invoice_id
@@ -639,261 +777,292 @@ func processWebhook(ctx context.Context, gatewayRef string, invoiceIDHint int64,
                     LIMIT 1
                     FOR UPDATE
                 `, currency, sar).Scan(&paymentID, &invoiceID, &currentStatus)
-                if err == sql.ErrNoRows {
-                    return nil
-                }
-                if err != nil {
-                    return err
-                }
-                // Attach gateway_ref now to ensure idempotency for subsequent events
-                logger.Info(ctx, "attach gateway_ref by amount fallback attempt", logger.Fields{
-                    "payment_id": paymentID,
-                    "invoice_id": invoiceID,
-                    "gateway_ref": gatewayRef,
-                })
-                _, err = tx.ExecContext(ctx, `UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$2 AND (gateway_ref IS NULL OR gateway_ref='')`, gatewayRef, paymentID)
-                if err != nil {
-                    logger.LogError(ctx, err, "attach gateway_ref by amount fallback failed", logger.Fields{
-                        "payment_id": paymentID,
-                        "invoice_id": invoiceID,
-                        "gateway_ref": gatewayRef,
-                    })
-                    return err
-                }
-            }
-        }
-        if err != nil {
-            return err
-        }
+				if err == sql.ErrNoRows {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				// Attach gateway_ref now to ensure idempotency for subsequent events
+				logger.Info(ctx, "attach gateway_ref by amount fallback attempt", logger.Fields{
+					"payment_id":  paymentID,
+					"invoice_id":  invoiceID,
+					"gateway_ref": gatewayRef,
+				})
+				_, err = tx.ExecContext(ctx, `UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$2 AND (gateway_ref IS NULL OR gateway_ref='')`, gatewayRef, paymentID)
+				if err != nil {
+					logger.LogError(ctx, err, "attach gateway_ref by amount fallback failed", logger.Fields{
+						"payment_id":  paymentID,
+						"invoice_id":  invoiceID,
+						"gateway_ref": gatewayRef,
+					})
+					return err
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
 
-        // Validate currency (and optionally amount) against invoice totals snapshot.
-        // Avoid casting in SQL to prevent transaction aborts on bad JSON; parse in Go instead.
-        var invCurrency sql.NullString
-        var invAmountStr sql.NullString
-        _ = tx.QueryRowContext(ctx, `SELECT totals->>'pay_currency', totals->>'pay_amount' FROM invoices WHERE id=$1`, invoiceID).Scan(&invCurrency, &invAmountStr)
-        if invCurrency.Valid {
-            if !strings.EqualFold(invCurrency.String, currency) {
-                return nil // ignore mismatched currency (avoid state change)
-            }
-        }
-        var invAmount sql.NullFloat64
-        if invAmountStr.Valid {
-            if f, perr := strconv.ParseFloat(strings.TrimSpace(invAmountStr.String), 64); perr == nil {
-                invAmount.Float64 = f
-                invAmount.Valid = true
-            }
-        }
+		logger.Info(ctx, "payment found", logger.Fields{
+			"payment_id":     paymentID,
+			"invoice_id":     invoiceID,
+			"current_status": currentStatus,
+		})
 
-        // Read pay_started_at and session TTL
-        var payStartedAtStr sql.NullString
-        _ = tx.QueryRowContext(ctx, `SELECT totals->>'pay_started_at' FROM invoices WHERE id=$1`, invoiceID).Scan(&payStartedAtStr)
-        // Use a safe default TTL if settings are unavailable
-        settings := config.GetSettings()
-        sessionTTL := 15
-        if settings != nil && settings.PaymentsSessionTTL > 0 {
-            sessionTTL = settings.PaymentsSessionTTL
-        }
-        var sessionExpired bool
-        if payStartedAtStr.Valid {
-            if t, err := time.Parse(time.RFC3339, payStartedAtStr.String); err == nil {
-                if now.After(t.Add(time.Duration(sessionTTL) * time.Minute)) {
-                    sessionExpired = true
-                }
-            }
-        }
+		// Validate currency (and optionally amount) against invoice totals snapshot.
+		// Avoid casting in SQL to prevent transaction aborts on bad JSON; parse in Go instead.
+		var invCurrency sql.NullString
+		var invAmountStr sql.NullString
+		_ = tx.QueryRowContext(ctx, `SELECT totals->>'pay_currency', totals->>'pay_amount' FROM invoices WHERE id=$1`, invoiceID).Scan(&invCurrency, &invAmountStr)
+		if invCurrency.Valid {
+			if !strings.EqualFold(invCurrency.String, currency) {
+				return nil // ignore mismatched currency (avoid state change)
+			}
+		}
+		var invAmount sql.NullFloat64
+		if invAmountStr.Valid {
+			if f, perr := strconv.ParseFloat(strings.TrimSpace(invAmountStr.String), 64); perr == nil {
+				invAmount.Float64 = f
+				invAmount.Valid = true
+			}
+		}
 
-        successAuthorized := status == "authorized"
-        successCaptured := status == "paid" || status == "captured" || status == "succeeded"
-        failed := status == "failed" || status == "canceled" || status == "cancelled"
+		// Read pay_started_at and session TTL
+		var payStartedAtStr sql.NullString
+		_ = tx.QueryRowContext(ctx, `SELECT totals->>'pay_started_at' FROM invoices WHERE id=$1`, invoiceID).Scan(&payStartedAtStr)
+		// Use a safe default TTL if settings are unavailable
+		settings := config.GetSettings()
+		sessionTTL := 15
+		if settings != nil && settings.PaymentsSessionTTL > 0 {
+			sessionTTL = settings.PaymentsSessionTTL
+		}
+		var sessionExpired bool
+		if payStartedAtStr.Valid {
+			if t, err := time.Parse(time.RFC3339, payStartedAtStr.String); err == nil {
+				if now.After(t.Add(time.Duration(sessionTTL) * time.Minute)) {
+					sessionExpired = true
+				}
+			}
+		}
 
-        // Metrics for webhook outcomes
-        if successCaptured {
-            metrics.WebhookOutcomesTotal.WithLabelValues("paid").Inc()
-        } else if successAuthorized {
-            metrics.WebhookOutcomesTotal.WithLabelValues("authorized").Inc()
-        } else if failed {
-            metrics.WebhookOutcomesTotal.WithLabelValues("failed").Inc()
-        } else {
-            metrics.WebhookOutcomesTotal.WithLabelValues(status).Inc()
-        }
+		successAuthorized := status == "authorized"
+		successCaptured := status == "paid" || status == "captured" || status == "succeeded"
+		failed := status == "failed" || status == "canceled" || status == "cancelled"
 
-        if successAuthorized && !successCaptured {
-            if sessionExpired {
-                // Late success without capture → mark failed and release
-                if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil {
-                    return err
-                }
-                if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='failed'`, invoiceID); err != nil {
-                    return err
-                }
-            } else {
-                // Keep payment pending until capture; snapshot authorized amount/currency
-                if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='pending', amount_authorized=GREATEST(amount_authorized,$1), currency=COALESCE($2,currency), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$3`, float64(amount)/100.0, currency, paymentID); err != nil {
-                    return err
-                }
-            }
-            return nil
-        }
+		logger.Info(ctx, "webhook status check", logger.Fields{
+			"status":            status,
+			"successAuthorized": successAuthorized,
+			"successCaptured":   successCaptured,
+			"failed":            failed,
+			"sessionExpired":    sessionExpired,
+		})
 
-        if successCaptured {
-            logger.Info(ctx, "webhook: success captured", logger.Fields{"payment_id": paymentID, "invoice_id": invoiceID})
-            if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='paid', amount_captured=GREATEST(amount_captured,$1), currency=COALESCE($2,currency), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$3`, float64(captured)/100.0, currency, paymentID); err != nil {
-                return err
-            }
-            if sessionExpired {
-                // Late success with capture → invoice refund_required; order awaiting_admin_refund (via trigger tweak not present, so set order explicitly)
-                if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='refund_required', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='refund_required'`, invoiceID); err != nil {
-                    return err
-                }
-                if _, err := tx.ExecContext(ctx, `UPDATE orders SET status='awaiting_admin_refund', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=(SELECT order_id FROM invoices WHERE id=$1)`, invoiceID); err != nil {
-                    logger.LogError(ctx, err, "update order awaiting_admin_refund failed", logger.Fields{"invoice_id": invoiceID})
-                    return err
-                }
-            } else {
-                // Normal success path
-                // Finalize the order atomically and idempotently (update order FIRST to avoid trigger race)
-                var orderID int64
-                if err := tx.QueryRowContext(ctx, `SELECT order_id FROM invoices WHERE id=$1`, invoiceID).Scan(&orderID); err != nil {
-                    return err
-                }
-                logger.Info(ctx, "webhook: mark order paid attempt", logger.Fields{"order_id": orderID})
-                res, err := tx.ExecContext(ctx, `UPDATE orders SET status='paid', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='paid'`, orderID)
-                if err != nil {
-                    return err
-                }
-                rows, _ := res.RowsAffected()
-                if rows > 0 {
-                    notifyPaid = true
-                    notifOrderID = orderID
-                    notifInvoiceID = invoiceID
-                    // Fetch order details for notification
-                    var buyerName, buyerEmail string
-                    if err := tx.QueryRowContext(ctx, `SELECT COALESCE(u.name,''), COALESCE(u.email,'') FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id=$1`, orderID).Scan(&buyerName, &buyerEmail); err != nil {
-                        return err
-                    }
-                    notifBuyerName = buyerName
-                    notifBuyerEmail = buyerEmail
-                    // Fetch order grand total for notification
-                    var grandTotal float64
-                    if err := tx.QueryRowContext(ctx, `SELECT COALESCE(grand_total,0) FROM orders WHERE id=$1`, orderID).Scan(&grandTotal); err != nil {
-                        return err
-                    }
-                    notifGrandTotal = grandTotal
-                    // First time we mark order paid → perform atomic stock/product transitions with conflict detection
-                    // Count expected pigeon lines
-                    var pigeonsTotal int64
-                    _ = tx.QueryRowContext(ctx, `
+		// Metrics for webhook outcomes
+		if successCaptured {
+			metrics.WebhookOutcomesTotal.WithLabelValues("paid").Inc()
+		} else if successAuthorized {
+			metrics.WebhookOutcomesTotal.WithLabelValues("authorized").Inc()
+		} else if failed {
+			metrics.WebhookOutcomesTotal.WithLabelValues("failed").Inc()
+		} else {
+			metrics.WebhookOutcomesTotal.WithLabelValues(status).Inc()
+		}
+
+		if successAuthorized && !successCaptured {
+			if sessionExpired {
+				// Late success without capture → mark failed and release
+				if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='failed'`, invoiceID); err != nil {
+					return err
+				}
+			} else {
+				// Keep payment pending until capture; snapshot authorized amount/currency
+				if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='pending', amount_authorized=GREATEST(amount_authorized,$1), currency=COALESCE($2,currency), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$3`, float64(amount)/100.0, currency, paymentID); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		if successCaptured {
+			logger.Info(ctx, "webhook: success captured", logger.Fields{"payment_id": paymentID, "invoice_id": invoiceID, "captured": captured, "amount": amount})
+			// Use captured amount if available, otherwise use total amount (Moyasar sometimes sends captured=0 for paid status)
+			capturedAmount := captured
+			if capturedAmount == 0 && (status == "paid" || status == "succeeded") {
+				capturedAmount = amount
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='paid', amount_captured=GREATEST(amount_captured,$1), currency=COALESCE($2,currency), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$3`, float64(capturedAmount)/100.0, currency, paymentID); err != nil {
+				return err
+			}
+			if sessionExpired {
+				// Late success with capture → invoice refund_required; order awaiting_admin_refund (via trigger tweak not present, so set order explicitly)
+				if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='refund_required', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='refund_required'`, invoiceID); err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE orders SET status='awaiting_admin_refund', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=(SELECT order_id FROM invoices WHERE id=$1)`, invoiceID); err != nil {
+					logger.LogError(ctx, err, "update order awaiting_admin_refund failed", logger.Fields{"invoice_id": invoiceID})
+					return err
+				}
+			} else {
+				// Normal success path
+				// Finalize the order atomically and idempotently (update order FIRST to avoid trigger race)
+				var orderID int64
+				if err := tx.QueryRowContext(ctx, `SELECT order_id FROM invoices WHERE id=$1`, invoiceID).Scan(&orderID); err != nil {
+					return err
+				}
+				logger.Info(ctx, "webhook: mark order paid attempt", logger.Fields{"order_id": orderID})
+				res, err := tx.ExecContext(ctx, `UPDATE orders SET status='paid', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='paid'`, orderID)
+				if err != nil {
+					return err
+				}
+				rows, _ := res.RowsAffected()
+				if rows > 0 {
+					notifyPaid = true
+					notifOrderID = orderID
+					notifInvoiceID = invoiceID
+					// Fetch order details for notification
+					var buyerName, buyerEmail string
+					if err := tx.QueryRowContext(ctx, `SELECT COALESCE(u.name,''), COALESCE(u.email,'') FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id=$1`, orderID).Scan(&buyerName, &buyerEmail); err != nil {
+						return err
+					}
+					notifBuyerName = buyerName
+					notifBuyerEmail = buyerEmail
+					// Fetch order grand total for notification
+					var grandTotal float64
+					if err := tx.QueryRowContext(ctx, `SELECT COALESCE(grand_total,0) FROM orders WHERE id=$1`, orderID).Scan(&grandTotal); err != nil {
+						return err
+					}
+					notifGrandTotal = grandTotal
+					// First time we mark order paid → perform atomic stock/product transitions with conflict detection
+					// Count expected pigeon lines
+					var pigeonsTotal int64
+					_ = tx.QueryRowContext(ctx, `
                         SELECT COUNT(*)
                         FROM order_items oi
                         JOIN products p ON p.id=oi.product_id
                         WHERE oi.order_id=$1 AND p.type='pigeon'
                     `, orderID).Scan(&pigeonsTotal)
-                    // Sell pigeons only if currently available
-                    resP, err := tx.ExecContext(ctx, `
+					// Sell pigeons only if currently available
+					resP, err := tx.ExecContext(ctx, `
                         UPDATE products p
                         SET status='sold', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                         FROM order_items oi
                         WHERE oi.order_id=$1 AND oi.product_id=p.id AND p.type='pigeon' AND p.status IN ('available','auction_hold')
                     `, orderID)
-                    if err != nil { return err }
-                    soldPigeons, _ := resP.RowsAffected()
-                    logger.Info(ctx, "webhook: sold pigeons", logger.Fields{"expected": pigeonsTotal, "updated": soldPigeons})
+					if err != nil {
+						return err
+					}
+					soldPigeons, _ := resP.RowsAffected()
+					logger.Info(ctx, "webhook: sold pigeons", logger.Fields{"expected": pigeonsTotal, "updated": soldPigeons})
 
-                    // Count expected supply lines
-                    var suppliesTotal int64
-                    _ = tx.QueryRowContext(ctx, `
+					// Count expected supply lines
+					var suppliesTotal int64
+					_ = tx.QueryRowContext(ctx, `
                         SELECT COUNT(*)
                         FROM order_items oi
                         JOIN products p ON p.id=oi.product_id
                         WHERE oi.order_id=$1 AND p.type='supply'
                     `, orderID).Scan(&suppliesTotal)
-                    // Deduct supplies only when enough stock
-                    resS, err := tx.ExecContext(ctx, `
+					// Deduct supplies only when enough stock
+					resS, err := tx.ExecContext(ctx, `
                         UPDATE supplies s
                         SET stock_qty = s.stock_qty - oi.qty
                         FROM order_items oi
                         JOIN products p ON p.id = oi.product_id AND p.type='supply'
                         WHERE oi.order_id=$1 AND s.product_id = oi.product_id AND s.stock_qty >= oi.qty
                     `, orderID)
-                    if err != nil { return err }
-                    deductedSupplies, _ := resS.RowsAffected()
-                    logger.Info(ctx, "webhook: deducted supplies", logger.Fields{"expected": suppliesTotal, "updated": deductedSupplies})
+					if err != nil {
+						return err
+					}
+					deductedSupplies, _ := resS.RowsAffected()
+					logger.Info(ctx, "webhook: deducted supplies", logger.Fields{"expected": suppliesTotal, "updated": deductedSupplies})
 
-                    // If any conflict (couldn't sell or deduct), mark refund_required and admin follow-up
-                    if (pigeonsTotal > 0 && soldPigeons < pigeonsTotal) || (suppliesTotal > 0 && deductedSupplies < suppliesTotal) {
-                        if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='refund_required', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, invoiceID); err != nil { return err }
-                        if _, err := tx.ExecContext(ctx, `UPDATE orders SET status='awaiting_admin_refund', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, orderID); err != nil { return err }
-                        if _, err := tx.ExecContext(ctx, `UPDATE payments SET refund_partial=TRUE, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil { return err }
-                    } else {
-                        // Optional: clear user's cart after successful fulfillment
-                        if _, err := tx.ExecContext(ctx, `DELETE FROM cart_items WHERE user_id=(SELECT user_id FROM orders WHERE id=$1)`, orderID); err != nil { return err }
-                    }
+					// If any conflict (couldn't sell or deduct), mark refund_required and admin follow-up
+					if (pigeonsTotal > 0 && soldPigeons < pigeonsTotal) || (suppliesTotal > 0 && deductedSupplies < suppliesTotal) {
+						if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='refund_required', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, invoiceID); err != nil {
+							return err
+						}
+						if _, err := tx.ExecContext(ctx, `UPDATE orders SET status='awaiting_admin_refund', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, orderID); err != nil {
+							return err
+						}
+						if _, err := tx.ExecContext(ctx, `UPDATE payments SET refund_partial=TRUE, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil {
+							return err
+						}
+					} else {
+						// Optional: clear user's cart after successful fulfillment
+						if _, err := tx.ExecContext(ctx, `DELETE FROM cart_items WHERE user_id=(SELECT user_id FROM orders WHERE id=$1)`, orderID); err != nil {
+							return err
+						}
+					}
 
-                    // Auto-create a pickup shipment for pigeon orders (no courier)
-                    var hasPigeons bool
-                    _ = tx.QueryRowContext(ctx, `
+					// Auto-create a pickup shipment for pigeon orders (no courier)
+					var hasPigeons bool
+					_ = tx.QueryRowContext(ctx, `
                         SELECT EXISTS(
                             SELECT 1 FROM order_items oi
                             JOIN products p ON p.id=oi.product_id
                             WHERE oi.order_id=$1 AND p.type='pigeon'
                         )
                     `, orderID).Scan(&hasPigeons)
-                    if hasPigeons {
-                        // Insert one pickup shipment if not already present for this order
-                        _, _ = tx.ExecContext(ctx, `
+					if hasPigeons {
+						// Insert one pickup shipment if not already present for this order
+						_, _ = tx.ExecContext(ctx, `
                             INSERT INTO shipments (order_id, delivery_method, status, tracking_ref)
                             SELECT $1, 'pickup', 'pending', $2
                             WHERE NOT EXISTS (
                                 SELECT 1 FROM shipments WHERE order_id=$1 AND delivery_method='pickup'
                             )
                         `, orderID, "لوفت الدغيري - بريدة، القصيم")
-                    }
-                }
-                // Mark invoice paid at the end to ensure order gating above succeeds
-                if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='paid', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='paid'`, invoiceID); err != nil {
-                    return err
-                }
-            }
-            return nil
-        }
+					}
+				}
+				// Mark invoice paid at the end to ensure order gating above succeeds
+				if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='paid', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='paid'`, invoiceID); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 
-        if failed {
-            if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil {
-                return err
-            }
-            if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='failed'`, invoiceID); err != nil {
-                return err
-            }
-            return nil
-        }
+		if failed {
+			if _, err := tx.ExecContext(ctx, `UPDATE payments SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1`, paymentID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE invoices SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id=$1 AND status!='failed'`, invoiceID); err != nil {
+				return err
+			}
+			return nil
+		}
 
-        return nil
-    })
-    if err != nil {
-        return err
-    }
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
-    // After commit, optionally notify the buyer their order was paid
-    if notifyPaid {
-        var buyerID int64
-        _ = db.Stdlib().QueryRowContext(ctx, `SELECT user_id FROM orders WHERE id=$1`, notifOrderID).Scan(&buyerID)
-        if buyerID > 0 {
-            payload := map[string]any{
-                "order_id":    notifOrderID,
-                "invoice_id":  notifInvoiceID,
-                "grand_total": fmt.Sprintf("%.2f", notifGrandTotal),
-                "name":        notifBuyerName,
-                "email":       notifBuyerEmail,
-                "currency":    currency,
-            }
-            // Fire-and-forget notification; ignore errors
-            _, _ = notifications.EnqueueInternal(ctx, buyerID, "order_paid", payload)
+	// After commit, optionally notify the buyer their order was paid
+	if notifyPaid {
+		var buyerID int64
+		_ = db.Stdlib().QueryRowContext(ctx, `SELECT user_id FROM orders WHERE id=$1`, notifOrderID).Scan(&buyerID)
+		if buyerID > 0 {
+			payload := map[string]any{
+				"order_id":    notifOrderID,
+				"invoice_id":  notifInvoiceID,
+				"grand_total": fmt.Sprintf("%.2f", notifGrandTotal),
+				"name":        notifBuyerName,
+				"email":       notifBuyerEmail,
+				"currency":    currency,
+			}
+			// Fire-and-forget notification; ignore errors
+			_, _ = notifications.EnqueueInternal(ctx, buyerID, "order_paid", payload)
 
-            // Send confirmation email to buyer
-            go func() {
-                // Check if order has pigeons for pickup info
-                var hasPigeons bool
-                _ = db.Stdlib().QueryRowContext(context.Background(), `
+			// Send confirmation email to buyer
+			go func() {
+				// Check if order has pigeons for pickup info
+				var hasPigeons bool
+				_ = db.Stdlib().QueryRowContext(context.Background(), `
                     SELECT EXISTS(
                         SELECT 1 FROM order_items oi
                         JOIN products p ON p.id = oi.product_id
@@ -901,85 +1070,89 @@ func processWebhook(ctx context.Context, gatewayRef string, invoiceIDHint int64,
                     )
                 `, notifOrderID).Scan(&hasPigeons)
 
-                // Get frontend URL
-                frontendURL := "https://loft-dughairi.com"
-                if encore.Meta().Environment.Type == encore.EnvDevelopment {
-                    frontendURL = "http://localhost:3000"
-                }
-                
-                emailData := templates.TemplateData{
-                    "name":         notifBuyerName,
-                    "order_id":     notifOrderID,
-                    "invoice_id":   notifInvoiceID,
-                    "grand_total":  fmt.Sprintf("%.2f", notifGrandTotal),
-                    "has_pigeons":  hasPigeons,
-                    "order_url":    fmt.Sprintf("%s/account/orders/%d", frontendURL, notifOrderID),
-                }
+				// Get frontend URL
+				frontendURL := "https://loft-dughairi.com"
+				if encore.Meta().Environment.Type == encore.EnvDevelopment {
+					frontendURL = "http://localhost:3000"
+				}
 
-                subject, htmlBody, textBody, err := templates.RenderTemplate("order_confirmation", "ar", emailData)
-                if err != nil {
-                    fmt.Printf("ERROR: Failed to render order confirmation template: %v\n", err)
-                    return
-                }
+				emailData := templates.TemplateData{
+					"name":        notifBuyerName,
+					"order_id":    notifOrderID,
+					"invoice_id":  notifInvoiceID,
+					"grand_total": fmt.Sprintf("%.2f", notifGrandTotal),
+					"has_pigeons": hasPigeons,
+					"order_url":   fmt.Sprintf("%s/account/orders/%d", frontendURL, notifOrderID),
+				}
 
-                mailClient := mailer.NewClient()
-                err = mailClient.Send(context.Background(), mailer.Mail{
-                    FromName:  "لوفت الدغيري",
-                    FromEmail: "contact@dughairiloft.com",
-                    ToName:    notifBuyerName,
-                    ToEmail:   notifBuyerEmail,
-                    Subject:   subject,
-                    HTML:      htmlBody,
-                    Text:      textBody,
-                })
-                if err != nil {
-                    fmt.Printf("ERROR: Failed to send order confirmation email to %s: %v\n", notifBuyerEmail, err)
-                } else {
-                    fmt.Printf("INFO: Order confirmation email sent successfully to %s (Order #%d)\n", notifBuyerEmail, notifOrderID)
-                }
-            }()
-        }
-    }
+				subject, htmlBody, textBody, err := templates.RenderTemplate("order_confirmation", "ar", emailData)
+				if err != nil {
+					fmt.Printf("ERROR: Failed to render order confirmation template: %v\n", err)
+					return
+				}
 
-    return nil
+				mailClient := mailer.NewClient()
+				err = mailClient.Send(context.Background(), mailer.Mail{
+					// FromName and FromEmail will use defaults from mailer.Client secrets
+					ToName:  notifBuyerName,
+					ToEmail: notifBuyerEmail,
+					Subject: subject,
+					HTML:    htmlBody,
+					Text:    textBody,
+				})
+				if err != nil {
+					fmt.Printf("ERROR: Failed to send order confirmation email to %s: %v\n", notifBuyerEmail, err)
+				} else {
+					fmt.Printf("INFO: Order confirmation email sent successfully to %s (Order #%d)\n", notifBuyerEmail, notifOrderID)
+				}
+			}()
+		}
+	}
+
+	logger.Info(ctx, "processWebhook completed successfully", logger.Fields{
+		"gateway_ref":  gatewayRef,
+		"invoice_hint": invoiceIDHint,
+		"notify_paid":  notifyPaid,
+	})
+	return nil
 }
 
 func withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-    std := db.Stdlib()
-    tx, err := std.BeginTx(ctx, &sql.TxOptions{})
-    if err != nil {
-        return err
-    }
-    defer func() {
-        if p := recover(); p != nil {
-            _ = tx.Rollback()
-            panic(p)
-        }
-    }()
-    if err := fn(tx); err != nil {
-        _ = tx.Rollback()
-        return err
-    }
-    return tx.Commit()
+	std := db.Stdlib()
+	tx, err := std.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+	}()
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // Payment DTO for retrieval
 type PaymentDTO struct {
-    ID               int64   `json:"id"`
-    InvoiceID        int64   `json:"invoice_id"`
-    Status           string  `json:"status"`
-    Gateway          string  `json:"gateway"`
-    GatewayRef       string  `json:"gateway_ref"`
-    AmountAuthorized float64 `json:"amount_authorized"`
-    AmountCaptured   float64 `json:"amount_captured"`
-    AmountRefunded   float64 `json:"amount_refunded"`
-    RefundPartial    bool    `json:"refund_partial"`
-    Currency         string  `json:"currency"`
-    CreatedAt        string  `json:"created_at"`
+	ID               int64   `json:"id"`
+	InvoiceID        int64   `json:"invoice_id"`
+	Status           string  `json:"status"`
+	Gateway          string  `json:"gateway"`
+	GatewayRef       string  `json:"gateway_ref"`
+	AmountAuthorized float64 `json:"amount_authorized"`
+	AmountCaptured   float64 `json:"amount_captured"`
+	AmountRefunded   float64 `json:"amount_refunded"`
+	RefundPartial    bool    `json:"refund_partial"`
+	Currency         string  `json:"currency"`
+	CreatedAt        string  `json:"created_at"`
 }
 
 type GetPaymentParams struct {
-    ID int64 `path:"id"`
+	ID int64 `path:"id"`
 }
 
 //encore:api auth method=GET path=/payments/:id

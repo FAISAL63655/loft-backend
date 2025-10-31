@@ -18,218 +18,218 @@ type Repository struct {
 
 // CreateProductQuestion inserts a new question for a product
 func (r *Repository) CreateProductQuestion(ctx context.Context, productID int64, userID *int64, question string) (*ProductQuestion, error) {
-    query := `
+	query := `
         INSERT INTO product_questions (product_id, user_id, question, status)
         VALUES ($1, $2, $3, 'pending')
         RETURNING id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
     `
-    var q ProductQuestion
-    err := r.db.QueryRow(ctx, query, productID, userID, question).Scan(
-        &q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to create product question: %w", err)
-    }
-    return &q, nil
+	var q ProductQuestion
+	err := r.db.QueryRow(ctx, query, productID, userID, question).Scan(
+		&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create product question: %w", err)
+	}
+	return &q, nil
 }
 
 // ListProductQuestionsPublic lists approved questions for a product
 func (r *Repository) ListProductQuestionsPublic(ctx context.Context, productID int64) ([]ProductQuestion, error) {
-    rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
         SELECT id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
         FROM product_questions
         WHERE product_id = $1 AND status = 'approved'
         ORDER BY created_at ASC
     `, productID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to list product questions: %w", err)
-    }
-    defer rows.Close()
-    var out []ProductQuestion
-    for rows.Next() {
-        var q ProductQuestion
-        if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
-            return nil, fmt.Errorf("failed to scan product question: %w", err)
-        }
-        out = append(out, q)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, fmt.Errorf("iter product questions: %w", err)
-    }
-    return out, nil
+	if err != nil {
+		return nil, fmt.Errorf("failed to list product questions: %w", err)
+	}
+	defer rows.Close()
+	var out []ProductQuestion
+	for rows.Next() {
+		var q ProductQuestion
+		if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan product question: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter product questions: %w", err)
+	}
+	return out, nil
 }
 
 // ListProductQuestionsAdmin lists questions for a product with optional status filter
 func (r *Repository) ListProductQuestionsAdmin(ctx context.Context, productID *int64, status *QuestionStatus) ([]ProductQuestion, error) {
-    sb := strings.Builder{}
-    sb.WriteString(`SELECT id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM product_questions`)
-    args := []interface{}{}
-    where := []string{}
-    if productID != nil {
-        where = append(where, fmt.Sprintf("product_id = $%d", len(args)+1))
-        args = append(args, *productID)
-    }
-    if status != nil {
-        where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
-        args = append(args, *status)
-    }
-    if len(where) > 0 {
-        sb.WriteString(" WHERE ")
-        sb.WriteString(strings.Join(where, " AND "))
-    }
-    sb.WriteString(" ORDER BY created_at DESC")
-    rows, err := r.db.Query(ctx, sb.String(), args...)
-    if err != nil {
-        return nil, fmt.Errorf("failed to list product questions (admin): %w", err)
-    }
-    defer rows.Close()
-    var out []ProductQuestion
-    for rows.Next() {
-        var q ProductQuestion
-        if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
-            return nil, fmt.Errorf("failed to scan product question: %w", err)
-        }
-        out = append(out, q)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, fmt.Errorf("iter product questions: %w", err)
-    }
-    return out, nil
+	sb := strings.Builder{}
+	sb.WriteString(`SELECT id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM product_questions`)
+	args := []interface{}{}
+	where := []string{}
+	if productID != nil {
+		where = append(where, fmt.Sprintf("product_id = $%d", len(args)+1))
+		args = append(args, *productID)
+	}
+	if status != nil {
+		where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
+		args = append(args, *status)
+	}
+	if len(where) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(where, " AND "))
+	}
+	sb.WriteString(" ORDER BY created_at DESC")
+	rows, err := r.db.Query(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list product questions (admin): %w", err)
+	}
+	defer rows.Close()
+	var out []ProductQuestion
+	for rows.Next() {
+		var q ProductQuestion
+		if err := rows.Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan product question: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter product questions: %w", err)
+	}
+	return out, nil
 }
 
 // AnswerProductQuestion sets the answer and approves the question
 func (r *Repository) AnswerProductQuestion(ctx context.Context, qid int64, answer string, answeredBy int64) (*ProductQuestion, error) {
-    query := `
+	query := `
         UPDATE product_questions
         SET answer = $2, answered_by = $3, answered_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), status = 'approved', updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
         WHERE id = $1
         RETURNING id, product_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
     `
-    var q ProductQuestion
-    err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
-    if err != nil {
-        return nil, fmt.Errorf("failed to answer product question: %w", err)
-    }
-    return &q, nil
+	var q ProductQuestion
+	err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.ProductID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to answer product question: %w", err)
+	}
+	return &q, nil
 }
 
 // SetProductQuestionStatus updates the status (pending/approved/rejected)
 func (r *Repository) SetProductQuestionStatus(ctx context.Context, qid int64, status QuestionStatus) error {
-    _, err := r.db.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
         UPDATE product_questions SET status = $2, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $1
     `, qid, status)
-    if err != nil {
-        return fmt.Errorf("failed to set product question status: %w", err)
-    }
-    return nil
+	if err != nil {
+		return fmt.Errorf("failed to set product question status: %w", err)
+	}
+	return nil
 }
 
 // CreateAuctionQuestion inserts a new question for an auction
 func (r *Repository) CreateAuctionQuestion(ctx context.Context, auctionID int64, userID *int64, question string) (*AuctionQuestion, error) {
-    query := `
+	query := `
         INSERT INTO auction_questions (auction_id, user_id, question, status)
         VALUES ($1, $2, $3, 'pending')
         RETURNING id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
     `
-    var q AuctionQuestion
-    err := r.db.QueryRow(ctx, query, auctionID, userID, question).Scan(
-        &q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
-    )
-    if err != nil {
-        return nil, fmt.Errorf("failed to create auction question: %w", err)
-    }
-    return &q, nil
+	var q AuctionQuestion
+	err := r.db.QueryRow(ctx, query, auctionID, userID, question).Scan(
+		&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create auction question: %w", err)
+	}
+	return &q, nil
 }
 
 // ListAuctionQuestionsPublic lists approved questions for an auction
 func (r *Repository) ListAuctionQuestionsPublic(ctx context.Context, auctionID int64) ([]AuctionQuestion, error) {
-    rows, err := r.db.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
         SELECT id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
         FROM auction_questions
         WHERE auction_id = $1 AND status = 'approved'
         ORDER BY created_at ASC
     `, auctionID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to list auction questions: %w", err)
-    }
-    defer rows.Close()
-    var out []AuctionQuestion
-    for rows.Next() {
-        var q AuctionQuestion
-        if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
-            return nil, fmt.Errorf("failed to scan auction question: %w", err)
-        }
-        out = append(out, q)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, fmt.Errorf("iter auction questions: %w", err)
-    }
-    return out, nil
+	if err != nil {
+		return nil, fmt.Errorf("failed to list auction questions: %w", err)
+	}
+	defer rows.Close()
+	var out []AuctionQuestion
+	for rows.Next() {
+		var q AuctionQuestion
+		if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan auction question: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter auction questions: %w", err)
+	}
+	return out, nil
 }
 
 // ListAuctionQuestionsAdmin lists questions with optional status filter
 func (r *Repository) ListAuctionQuestionsAdmin(ctx context.Context, auctionID *int64, status *QuestionStatus) ([]AuctionQuestion, error) {
-    sb := strings.Builder{}
-    sb.WriteString(`SELECT id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM auction_questions`)
-    args := []interface{}{}
-    where := []string{}
-    if auctionID != nil {
-        where = append(where, fmt.Sprintf("auction_id = $%d", len(args)+1))
-        args = append(args, *auctionID)
-    }
-    if status != nil {
-        where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
-        args = append(args, *status)
-    }
-    if len(where) > 0 {
-        sb.WriteString(" WHERE ")
-        sb.WriteString(strings.Join(where, " AND "))
-    }
-    sb.WriteString(" ORDER BY created_at DESC")
-    rows, err := r.db.Query(ctx, sb.String(), args...)
-    if err != nil {
-        return nil, fmt.Errorf("failed to list auction questions (admin): %w", err)
-    }
-    defer rows.Close()
-    var out []AuctionQuestion
-    for rows.Next() {
-        var q AuctionQuestion
-        if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
-            return nil, fmt.Errorf("failed to scan auction question: %w", err)
-        }
-        out = append(out, q)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, fmt.Errorf("iter auction questions: %w", err)
-    }
-    return out, nil
+	sb := strings.Builder{}
+	sb.WriteString(`SELECT id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at FROM auction_questions`)
+	args := []interface{}{}
+	where := []string{}
+	if auctionID != nil {
+		where = append(where, fmt.Sprintf("auction_id = $%d", len(args)+1))
+		args = append(args, *auctionID)
+	}
+	if status != nil {
+		where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
+		args = append(args, *status)
+	}
+	if len(where) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(where, " AND "))
+	}
+	sb.WriteString(" ORDER BY created_at DESC")
+	rows, err := r.db.Query(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list auction questions (admin): %w", err)
+	}
+	defer rows.Close()
+	var out []AuctionQuestion
+	for rows.Next() {
+		var q AuctionQuestion
+		if err := rows.Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan auction question: %w", err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iter auction questions: %w", err)
+	}
+	return out, nil
 }
 
 // AnswerAuctionQuestion sets the answer and approves the question
 func (r *Repository) AnswerAuctionQuestion(ctx context.Context, qid int64, answer string, answeredBy int64) (*AuctionQuestion, error) {
-    query := `
+	query := `
         UPDATE auction_questions
         SET answer = $2, answered_by = $3, answered_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), status = 'approved', updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
         WHERE id = $1
         RETURNING id, auction_id, user_id, question, answer, answered_by, status, created_at, answered_at, updated_at
     `
-    var q AuctionQuestion
-    err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
-    if err != nil {
-        return nil, fmt.Errorf("failed to answer auction question: %w", err)
-    }
-    return &q, nil
+	var q AuctionQuestion
+	err := r.db.QueryRow(ctx, query, qid, answer, answeredBy).Scan(&q.ID, &q.AuctionID, &q.UserID, &q.Question, &q.Answer, &q.AnsweredBy, &q.Status, &q.CreatedAt, &q.AnsweredAt, &q.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to answer auction question: %w", err)
+	}
+	return &q, nil
 }
 
 // SetAuctionQuestionStatus updates the status (pending/approved/rejected)
 func (r *Repository) SetAuctionQuestionStatus(ctx context.Context, qid int64, status QuestionStatus) error {
-    _, err := r.db.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
         UPDATE auction_questions SET status = $2, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $1
     `, qid, status)
-    if err != nil {
-        return fmt.Errorf("failed to set auction question status: %w", err)
-    }
-    return nil
+	if err != nil {
+		return fmt.Errorf("failed to set auction question status: %w", err)
+	}
+	return nil
 }
 
 // NewRepository creates a new catalog repository
@@ -318,9 +318,16 @@ func (r *Repository) GetProducts(ctx context.Context, filter ProductsFilter, sor
 	args = append(args, offset)
 
 	query := fmt.Sprintf(`
-		SELECT 
-			p.id, p.type, p.title, p.slug, p.description, 
-			p.price_net, p.status, p.created_at, p.updated_at
+		SELECT
+			p.id, p.type, p.title, p.slug, p.description,
+			p.price_net, p.status, p.created_at, p.updated_at,
+			(SELECT m.gcs_path
+			 FROM media m
+			 WHERE m.product_id = p.id
+			   AND m.kind = 'image'
+			   AND m.archived_at IS NULL
+			 ORDER BY m.created_at ASC
+			 LIMIT 1) as thumbnail_url
 		FROM products p
 		%s
 		%s
@@ -339,6 +346,7 @@ func (r *Repository) GetProducts(ctx context.Context, filter ProductsFilter, sor
 		err := rows.Scan(
 			&p.ID, &p.Type, &p.Title, &p.Slug, &p.Description,
 			&p.PriceNet, &p.Status, &p.CreatedAt, &p.UpdatedAt,
+			&p.ThumbnailURL,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan product: %w", err)
@@ -430,15 +438,15 @@ func (r *Repository) UpdateProduct(ctx context.Context, product *Product) error 
 		SET title = $2, description = $3, price_net = $4, status = $5, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE id = $1
 	`
-	
-	_, err := r.db.Exec(ctx, query, 
+
+	_, err := r.db.Exec(ctx, query,
 		product.ID,
 		product.Title,
 		product.Description,
 		product.PriceNet,
 		product.Status,
 	)
-	
+
 	return err
 }
 
@@ -463,7 +471,7 @@ func (r *Repository) UpdateProductPartial(ctx context.Context, productID int64, 
 		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE id = $1
 	`, strings.Join(setParts, ", "))
-	
+
 	_, err := r.db.Exec(ctx, query, args...)
 	return err
 }
@@ -583,9 +591,9 @@ func (r *Repository) UpdateSupplyStock(ctx context.Context, productID int64, new
 // GetMediaByProductID retrieves all media for a product
 func (r *Repository) GetMediaByProductID(ctx context.Context, productID int64, includeArchived bool) ([]Media, error) {
 	query := `
-		SELECT 
+		SELECT
 			id, product_id, kind, gcs_path, thumb_path, watermark_applied,
-			file_size, mime_type, original_filename, archived_at, created_at, updated_at
+			file_size, mime_type, original_filename, description, archived_at, created_at, updated_at
 		FROM media
 		WHERE product_id = $1
 	`
@@ -609,7 +617,7 @@ func (r *Repository) GetMediaByProductID(ctx context.Context, productID int64, i
 		var m Media
 		err := rows.Scan(
 			&m.ID, &m.ProductID, &m.Kind, &m.GCSPath, &m.ThumbPath, &m.WatermarkApplied,
-			&m.FileSize, &m.MimeType, &m.OriginalFilename, &m.ArchivedAt,
+			&m.FileSize, &m.MimeType, &m.OriginalFilename, &m.Description, &m.ArchivedAt,
 			&m.CreatedAt, &m.UpdatedAt,
 		)
 		if err != nil {
@@ -630,15 +638,15 @@ func (r *Repository) CreateMedia(ctx context.Context, media *Media) error {
 	query := `
 		INSERT INTO media (
 			product_id, kind, gcs_path, thumb_path, watermark_applied,
-			file_size, mime_type, original_filename
+			file_size, mime_type, original_filename, description
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, updated_at
 	`
 
 	err := r.db.QueryRow(ctx, query,
 		media.ProductID, media.Kind, media.GCSPath, media.ThumbPath, media.WatermarkApplied,
-		media.FileSize, media.MimeType, media.OriginalFilename,
+		media.FileSize, media.MimeType, media.OriginalFilename, media.Description,
 	).Scan(&media.ID, &media.CreatedAt, &media.UpdatedAt)
 
 	if err != nil {
@@ -648,16 +656,28 @@ func (r *Repository) CreateMedia(ctx context.Context, media *Media) error {
 	return nil
 }
 
+// ArchiveAllProductMedia archives all media for a product
+func (r *Repository) ArchiveAllProductMedia(ctx context.Context, productID int64) error {
+	query := `
+		UPDATE media
+		SET archived_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+		    updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE product_id = $1 AND archived_at IS NULL
+	`
+	_, err := r.db.Exec(ctx, query, productID)
+	return err
+}
+
 // UpdateMedia updates media properties
 func (r *Repository) UpdateMedia(ctx context.Context, media *Media) error {
 	query := `
-		UPDATE media 
-		SET archived_at = $2, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		UPDATE media
+		SET description = $2, archived_at = $3, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE id = $1
 		RETURNING updated_at
 	`
 
-	err := r.db.QueryRow(ctx, query, media.ID, media.ArchivedAt).Scan(&media.UpdatedAt)
+	err := r.db.QueryRow(ctx, query, media.ID, media.Description, media.ArchivedAt).Scan(&media.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to update media: %w", err)
 	}
@@ -668,9 +688,9 @@ func (r *Repository) UpdateMedia(ctx context.Context, media *Media) error {
 // GetMediaByID retrieves a media entry by ID
 func (r *Repository) GetMediaByID(ctx context.Context, mediaID int64) (*Media, error) {
 	query := `
-		SELECT 
+		SELECT
 			id, product_id, kind, gcs_path, thumb_path, watermark_applied,
-			file_size, mime_type, original_filename, archived_at, created_at, updated_at
+			file_size, mime_type, original_filename, description, archived_at, created_at, updated_at
 		FROM media
 		WHERE id = $1
 	`
@@ -678,7 +698,7 @@ func (r *Repository) GetMediaByID(ctx context.Context, mediaID int64) (*Media, e
 	var m Media
 	err := r.db.QueryRow(ctx, query, mediaID).Scan(
 		&m.ID, &m.ProductID, &m.Kind, &m.GCSPath, &m.ThumbPath, &m.WatermarkApplied,
-		&m.FileSize, &m.MimeType, &m.OriginalFilename, &m.ArchivedAt,
+		&m.FileSize, &m.MimeType, &m.OriginalFilename, &m.Description, &m.ArchivedAt,
 		&m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
@@ -751,7 +771,7 @@ func (r *Repository) UpdatePigeon(ctx context.Context, productID int64, updates 
 		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE product_id = $1
 	`, strings.Join(setParts, ", "))
-	
+
 	_, err := r.db.Exec(ctx, query, args...)
 	return err
 }
@@ -777,7 +797,7 @@ func (r *Repository) UpdateSupply(ctx context.Context, productID int64, updates 
 		SET %s, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 		WHERE product_id = $1
 	`, strings.Join(setParts, ", "))
-	
+
 	_, err := r.db.Exec(ctx, query, args...)
 	return err
 }

@@ -148,44 +148,91 @@ var templates = map[string]*EmailTemplate{
         }
     </style>
 </head>
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>تأكيد بريدك الإلكتروني</title>
+<style>
+  /* إعدادات عامة مصغّرة وRTL */
+  body{margin:0;background:#f7f9f8;color:#1f2937;font-family:Tahoma,"Segoe UI",Arial,sans-serif;direction:rtl;text-align:right;}
+  .email-wrapper{max-width:600px;margin:0 auto;padding:16px;}
+  /* الهيدر – ألوان الهوية */
+  .header{background:#2f7d6d;color:#fff;border-radius:12px;padding:16px;text-align:center;}
+  .logo{font-weight:700;font-size:16px;line-height:1.2;}
+  .logo-subtitle{opacity:.9;font-size:11px;margin-top:4px;}
+  .header h1{margin:10px 0 0;font-size:16px;font-weight:700;line-height:1.3;}
+  /* المحتوى */
+  .content{background:#fff;border:1px solid #e6e9ec;border-radius:12px;margin-top:12px;padding:14px;}
+  .greeting{font-size:13px;font-weight:700;margin-bottom:8px;color:#1f2937;}
+  .message{font-size:12px;line-height:1.5;margin:0 0 10px;color:#3b4451;}
+  /* صندوق الرمز */
+  .code-container{background:#e9f7f1;border:2px dashed #2f7d6d;border-radius:12px;padding:12px;text-align:center;margin:12px 0;}
+  .code-label{font-size:11px;color:#256b5d;margin-bottom:6px;}
+  .code{font-size:22px;font-weight:800;letter-spacing:6px;color:#134e4a;font-family:Consolas,Menlo,Monaco,monospace;}
+  .notice{background:#fff6e6;border-right:3px solid #f1b75b;border-radius:8px;padding:10px;margin-top:10px;}
+  .notice p{margin:0;font-size:11px;color:#6b5e3c;}
+  /* الفوتر */
+  .footer{color:#3b4451;text-align:center;margin-top:14px;padding:10px 6px;}
+  .footer-brand{font-weight:700;color:#2f7d6d;font-size:12px;margin-bottom:4px;}
+  .footer-text{font-size:10px;color:#6c757d;margin:3px 0;}
+  .social-links{font-size:10px;margin-top:6px;color:#2f7d6d}
+  .social-links a{color:#2f7d6d;text-decoration:none}
+  .social-links a:hover{text-decoration:underline}
+  /* تصغير المسافات على الشاشات الصغيرة */
+  @media (max-width:480px){
+    .email-wrapper{padding:10px}
+    .header{padding:12px}
+    .content{padding:12px}
+    .code{font-size:20px;letter-spacing:5px}
+  }
+</style>
+</head>
 <body>
-    <div class="email-wrapper">
-        <div class="header">
-            <div class="logo">لوفت الدغيري</div>
-            <div class="logo-subtitle">Al-Dughairi Loft</div>
-            <h1>تأكيد بريدك الإلكتروني</h1>
-        </div>
-        <div class="content">
-            <div class="greeting">مرحباً بك {{.Name}}</div>
-            <p class="message">
-                شكراً لانضمامك إلى لوفت الدغيري. لإكمال عملية التحقق من بريدك الإلكتروني،
-                يُرجى استخدام رمز التفعيل التالي:
-            </p>
-            <div class="code-container">
-                <div class="code-label">رمز التفعيل</div>
-                <div class="code">{{.verification_code}}</div>
-            </div>
-            <div class="notice">
-                <p>الرمز صالح لمدة {{.expires_in}}. يُرجى عدم مشاركة الرمز مع أي شخص.</p>
-            </div>
-            <p class="message" style="font-size: 14px; color: #6c757d;">
-                إذا لم تقم بإنشاء حساب في لوفت الدغيري، يمكنك تجاهل هذه الرسالة بأمان.
-            </p>
-        </div>
-        <div class="footer">
-            <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
-            <div class="social-links">
-                <a href="#">الموقع الإلكتروني</a> •
-                <a href="#">تواصل معنا</a> •
-                <a href="#">الشروط والأحكام</a>
-            </div>
-            <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
-            </p>
-        </div>
+  <div class="email-wrapper">
+    <div class="header">
+      <div class="logo">لوفت الدغيري</div>
+      <div class="logo-subtitle">Al-Dughairi Loft</div>
+      <h1>تأكيد بريدك الإلكتروني</h1>
     </div>
+
+    <div class="content">
+      <div class="greeting">مرحباً بك {{.Name}}</div>
+
+      <p class="message">
+        شكراً لانضمامك إلى لوفت الدغيري. لإكمال عملية التحقق من بريدك الإلكتروني،
+        يُرجى استخدام رمز التفعيل التالي:
+      </p>
+
+      <div class="code-container">
+        <div class="code-label">رمز التفعيل</div>
+        <div class="code">{{.verification_code}}</div>
+      </div>
+
+      <div class="notice">
+        <p>الرمز صالح لمدة {{.expires_in}}. يُرجى عدم مشاركة الرمز مع أي شخص.</p>
+      </div>
+
+      <p class="message" style="font-size:11px;color:#6c757d;margin-top:10px;">
+        إذا لم تقم بإنشاء حساب في لوفت الدغيري، يمكنك تجاهل هذه الرسالة بأمان.
+      </p>
+    </div>
+
+    <div class="footer">
+      <div class="footer-brand">لوفت الدغيري</div>
+      <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+      <div class="social-links">
+        <a href="https://dughairiloft.com/" target="_blank">الموقع الإلكتروني</a> •
+        <a href="https://dughairiloft.com/contact" target="_blank">تواصل معنا</a> •
+        <a href="https://dughairiloft.com/terms" target="_blank">الشروط والأحكام</a>
+      </div>
+      <p class="footer-text" style="margin-top:8px;">&copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة</p>
+    </div>
+  </div>
 </body>
+</html>
+
 </html>`,
 			"en": `<!DOCTYPE html>
 <html lang="en">

@@ -30,72 +30,96 @@ func parseProductID(id string) (int64, error) {
 	return strconv.ParseInt(id, 10, 64)
 }
 
+// determineMediaKindFromPath determines the media kind from file path/extension
+func (s *Service) determineMediaKindFromPath(path string) MediaKind {
+	ext := strings.ToLower(filepath.Ext(path))
+
+	// Image extensions
+	imageExts := []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+	for _, imgExt := range imageExts {
+		if ext == imgExt {
+			return MediaKindImage
+		}
+	}
+
+	// Video extensions
+	videoExts := []string{".mp4", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mkv"}
+	for _, vidExt := range videoExts {
+		if ext == vidExt {
+			return MediaKindVideo
+		}
+	}
+
+	// Default to file for documents (PDF, Excel, etc.)
+	return MediaKindFile
+}
+
 // CreateExternalMedia creates a media entry for an external link (e.g., YouTube or general link)
 func (s *Service) CreateExternalMedia(
-    ctx context.Context,
-    productID int64,
-    linkURL string,
-    kind string,
-    thumbPath *string,
-    fileSize *int64,
-    mimeType *string,
-    originalFilename *string,
+	ctx context.Context,
+	productID int64,
+	linkURL string,
+	kind string,
+	thumbPath *string,
+	fileSize *int64,
+	mimeType *string,
+	originalFilename *string,
 ) (*UploadMediaResponse, error) {
-    // Basic validation
-    if !strings.HasPrefix(linkURL, "http://") && !strings.HasPrefix(linkURL, "https://") {
-        return nil, errs.E(ctx, "CAT_MEDIA_LINK_INVALID", "رابط غير صالح")
-    }
+	// Basic validation
+	if !strings.HasPrefix(linkURL, "http://") && !strings.HasPrefix(linkURL, "https://") {
+		return nil, errs.E(ctx, "CAT_MEDIA_LINK_INVALID", "رابط غير صالح")
+	}
 
-    // Ensure product exists
-    product, err := s.repo.GetProductByID(ctx, productID)
-    if err != nil {
-        return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل التحقق من وجود المنتج")
-    }
-    if product == nil {
-        return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
-    }
+	// Ensure product exists
+	product, err := s.repo.GetProductByID(ctx, productID)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل التحقق من وجود المنتج")
+	}
+	if product == nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+	}
 
-    // Map provided kind to media kind
-    mk := MediaKindFile
-    switch strings.ToLower(kind) {
-    case "youtube", "video":
-        mk = MediaKindVideo
-    case "image":
-        mk = MediaKindImage
-    default:
-        mk = MediaKindFile
-    }
+	// Map provided kind to media kind
+	mk := MediaKindFile
+	switch strings.ToLower(kind) {
+	case "youtube", "video":
+		mk = MediaKindVideo
+	case "image":
+		mk = MediaKindImage
+	default:
+		mk = MediaKindFile
+	}
 
-    // Create media record pointing to the external URL directly in GCSPath field
-    media := &Media{
-        ProductID:        productID,
-        Kind:             mk,
-        GCSPath:          linkURL,
-        ThumbPath:        nil,
-        WatermarkApplied: false,
-        FileSize:         nil,
-        MimeType:         nil,
-        OriginalFilename: nil,
-    }
+	// Create media record pointing to the external URL directly in GCSPath field
+	media := &Media{
+		ProductID:        productID,
+		Kind:             mk,
+		GCSPath:          linkURL,
+		ThumbPath:        nil,
+		WatermarkApplied: false,
+		FileSize:         nil,
+		MimeType:         nil,
+		OriginalFilename: nil,
+	}
 
-    if thumbPath != nil && *thumbPath != "" {
-        media.ThumbPath = thumbPath
-    }
-    if fileSize != nil && *fileSize > 0 {
-        media.FileSize = fileSize
-    }
-    if mimeType != nil && *mimeType != "" {
-        media.MimeType = mimeType
-    }
-    if originalFilename != nil && *originalFilename != "" {
-        media.OriginalFilename = originalFilename
-    }
+	if thumbPath != nil && *thumbPath != "" {
+		media.ThumbPath = thumbPath
+	}
+	if fileSize != nil && *fileSize > 0 {
+		media.FileSize = fileSize
+	}
+	if mimeType != nil && *mimeType != "" {
+		media.MimeType = mimeType
+	}
+	if originalFilename != nil && *originalFilename != "" {
+		media.OriginalFilename = originalFilename
+	}
 
-    if err := s.repo.CreateMedia(ctx, media); err != nil {
-        return nil, errs.E(ctx, "CAT_MEDIA_SAVE_FAILED", "فشل حفظ سجل الوسائط")
-    }
+	if err := s.repo.CreateMedia(ctx, media); err != nil {
+		return nil, errs.E(ctx, "CAT_MEDIA_SAVE_FAILED", "فشل حفظ سجل الوسائط")
+	}
 
-    return &UploadMediaResponse{Media: *media}, nil
+	return &UploadMediaResponse{Media: *media}, nil
 }
 
 // NewService creates a new catalog service
@@ -120,17 +144,17 @@ func (s *Service) executeWithTransaction(ctx context.Context, fn func(context.Co
 		return fmt.Errorf("فشل بدء المعاملة: %w", err)
 	}
 	defer tx.Rollback()
-	
+
 	// Execute the function
 	if err := fn(ctx); err != nil {
 		return err
 	}
-	
+
 	// Commit if successful
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("فشل تأكيد المعاملة: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -240,6 +264,29 @@ func (s *Service) GetProductByID(ctx context.Context, id int64) (*ProductDetailR
 	}, nil
 }
 
+// GetProductBySlug retrieves a single product by slug with full details
+func (s *Service) GetProductBySlug(ctx context.Context, slug string) (*ProductDetailResponse, error) {
+	// Get product
+	product, err := s.repo.GetProductBySlug(ctx, slug)
+	if err != nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_READ_FAILED", "فشل جلب المنتج")
+	}
+
+	if product == nil {
+		return nil, errs.E(ctx, "CAT_PRODUCT_NOT_FOUND", "المنتج غير موجود")
+	}
+
+	// Get full details
+	productWithDetails, err := s.getProductWithDetails(ctx, product)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ProductDetailResponse{
+		Product: *productWithDetails,
+	}, nil
+}
+
 // CreateProduct creates a new product with all details using database transaction
 func (s *Service) CreateProduct(ctx context.Context, req CreateProductRequest) (*CreateProductResponse, error) {
 	if err := req.Validate(); err != nil {
@@ -266,7 +313,7 @@ func (s *Service) CreateProduct(ctx context.Context, req CreateProductRequest) (
 	// Use wrapper function for atomic product creation
 	var product *Product
 	var createErr error
-	
+
 	// Wrapper function to execute product creation atomically
 	executeProductCreation := func(ctx context.Context) error {
 		// Create product
@@ -321,13 +368,72 @@ func (s *Service) CreateProduct(ctx context.Context, req CreateProductRequest) (
 				return err
 			}
 		}
+
+		// Create media records for GCS paths (files uploaded via UploadMediaDraft)
+		if len(req.MediaURLs) > 0 {
+			for _, gcsPath := range req.MediaURLs {
+				if gcsPath == "" {
+					continue
+				}
+
+				// Determine media kind from file extension
+				kind := s.determineMediaKindFromPath(gcsPath)
+
+				media := &Media{
+					ProductID:        product.ID,
+					Kind:             kind,
+					GCSPath:          gcsPath, // GCS path from UploadMediaDraft
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Create media records for YouTube URLs
+		if len(req.YoutubeURLs) > 0 {
+			for _, youtubeURL := range req.YoutubeURLs {
+				if youtubeURL == "" {
+					continue
+				}
+				media := &Media{
+					ProductID:        product.ID,
+					Kind:             MediaKindVideo,
+					GCSPath:          youtubeURL,
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Create media records for website URLs
+		if len(req.WebsiteURLs) > 0 {
+			for _, websiteURL := range req.WebsiteURLs {
+				if websiteURL == "" {
+					continue
+				}
+				media := &Media{
+					ProductID:        product.ID,
+					Kind:             MediaKindFile,
+					GCSPath:          websiteURL,
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+		}
+
 		return nil
 	}
-	
+
 	// Execute within transaction using wrapper
 	createErr = s.executeWithTransaction(ctx, executeProductCreation)
 	if createErr != nil {
-		return nil, errs.E(ctx, "CAT_PRODUCT_CREATE_FAILED", "فشل إنشاء المنتج: " + createErr.Error())
+		return nil, errs.E(ctx, "CAT_PRODUCT_CREATE_FAILED", "فشل إنشاء المنتج: "+createErr.Error())
 	}
 
 	// Get full product with details (outside transaction)
@@ -377,12 +483,12 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProduc
 	// Use wrapper function for atomic product update
 	var updatedProduct *Product
 	var updateErr error
-	
+
 	// Wrapper function to execute product update atomically
 	executeProductUpdate := func(ctx context.Context) error {
 		// Update product fields
 		updates := make(map[string]interface{})
-		
+
 		if req.Title != nil {
 			updates["title"] = *req.Title
 			// Generate new slug if title changed
@@ -394,15 +500,15 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProduc
 				updates["slug"] = newSlug
 			}
 		}
-		
+
 		if req.Description != nil {
 			updates["description"] = *req.Description
 		}
-		
+
 		if req.PriceNet != nil {
 			updates["price_net"] = *req.PriceNet
 		}
-		
+
 		if req.Status != nil {
 			updates["status"] = *req.Status
 		}
@@ -418,7 +524,7 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProduc
 		switch existingProduct.Type {
 		case ProductTypePigeon:
 			pigeonUpdates := make(map[string]interface{})
-			
+
 			if req.RingNumber != nil {
 				pigeonUpdates["ring_number"] = *req.RingNumber
 			}
@@ -446,7 +552,7 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProduc
 
 		case ProductTypeSupply:
 			supplyUpdates := make(map[string]interface{})
-			
+
 			if req.SKU != nil {
 				supplyUpdates["sku"] = *req.SKU
 			}
@@ -463,13 +569,74 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, req UpdateProduc
 				}
 			}
 		}
+
+		// Update media if provided
+		if len(req.MediaURLs) > 0 || len(req.YoutubeURLs) > 0 || len(req.WebsiteURLs) > 0 {
+			// Archive existing media
+			if err := s.repo.ArchiveAllProductMedia(ctx, productID); err != nil {
+				return err
+			}
+
+			// Create new media records for GCS paths (files uploaded via UploadMediaDraft)
+			for _, gcsPath := range req.MediaURLs {
+				if gcsPath == "" {
+					continue
+				}
+
+				// Determine media kind from file extension
+				kind := s.determineMediaKindFromPath(gcsPath)
+
+				media := &Media{
+					ProductID:        productID,
+					Kind:             kind,
+					GCSPath:          gcsPath, // GCS path from UploadMediaDraft
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+
+			// Create new media records for YouTube URLs
+			for _, youtubeURL := range req.YoutubeURLs {
+				if youtubeURL == "" {
+					continue
+				}
+				media := &Media{
+					ProductID:        productID,
+					Kind:             MediaKindVideo,
+					GCSPath:          youtubeURL,
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+
+			// Create new media records for website URLs
+			for _, websiteURL := range req.WebsiteURLs {
+				if websiteURL == "" {
+					continue
+				}
+				media := &Media{
+					ProductID:        productID,
+					Kind:             MediaKindFile,
+					GCSPath:          websiteURL,
+					WatermarkApplied: false,
+				}
+				if err := s.repo.CreateMedia(ctx, media); err != nil {
+					return err
+				}
+			}
+		}
+
 		return nil
 	}
-	
+
 	// Execute within transaction using wrapper
 	updateErr = s.executeWithTransaction(ctx, executeProductUpdate)
 	if updateErr != nil {
-		return nil, errs.E(ctx, "CAT_PRODUCT_UPDATE_FAILED", "فشل تحديث المنتج: " + updateErr.Error())
+		return nil, errs.E(ctx, "CAT_PRODUCT_UPDATE_FAILED", "فشل تحديث المنتج: "+updateErr.Error())
 	}
 
 	// Get updated product with details (outside transaction)
@@ -516,7 +683,7 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) (*DeleteProductR
 	}
 
 	if err := s.repo.UpdateProductPartial(ctx, productID, updates); err != nil {
-		return nil, errs.E(ctx, "CAT_PRODUCT_DELETE_FAILED", "فشل حذف المنتج: " + err.Error())
+		return nil, errs.E(ctx, "CAT_PRODUCT_DELETE_FAILED", "فشل حذف المنتج: "+err.Error())
 	}
 
 	return &DeleteProductResponse{
@@ -526,7 +693,7 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) (*DeleteProductR
 }
 
 // UploadMedia uploads media file for a product
-func (s *Service) UploadMedia(ctx context.Context, productID int64, file multipart.File, header *multipart.FileHeader) (*UploadMediaResponse, error) {
+func (s *Service) UploadMedia(ctx context.Context, productID int64, file multipart.File, header *multipart.FileHeader, description *string) (*UploadMediaResponse, error) {
 	// Check if product exists
 	product, err := s.repo.GetProductByID(ctx, productID)
 	if err != nil {
@@ -581,6 +748,7 @@ func (s *Service) UploadMedia(ctx context.Context, productID int64, file multipa
 		FileSize:         &uploadResult.Size,
 		MimeType:         func() *string { ct := header.Header.Get("Content-Type"); return &ct }(),
 		OriginalFilename: &header.Filename,
+		Description:      description,
 	}
 
 	if err := s.repo.CreateMedia(ctx, media); err != nil {
@@ -592,8 +760,8 @@ func (s *Service) UploadMedia(ctx context.Context, productID int64, file multipa
 	}, nil
 }
 
-// UpdateMedia updates media properties (mainly for archiving/unarchiving)
-func (s *Service) UpdateMedia(ctx context.Context, productID, mediaID int64, archivedAt *time.Time) (*UpdateMediaResponse, error) {
+// UpdateMedia updates media properties (mainly for archiving/unarchiving and description)
+func (s *Service) UpdateMedia(ctx context.Context, productID, mediaID int64, description *string, archivedAt *time.Time) (*UpdateMediaResponse, error) {
 	// Get media
 	media, err := s.repo.GetMediaByID(ctx, mediaID)
 	if err != nil {
@@ -610,6 +778,9 @@ func (s *Service) UpdateMedia(ctx context.Context, productID, mediaID int64, arc
 	}
 
 	// Update media
+	if description != nil {
+		media.Description = description
+	}
 	media.ArchivedAt = archivedAt
 	if err := s.repo.UpdateMedia(ctx, media); err != nil {
 		return nil, errs.E(ctx, "CAT_MEDIA_UPDATE_FAILED", "فشل تحديث الوسائط")
@@ -717,11 +888,19 @@ func (s *Service) convertToSummary(ctx context.Context, product Product, vatSett
 
 		// Find first image for thumbnail
 		for _, media := range mediaList {
-			if media.Kind == MediaKindImage && media.ThumbPath != nil {
-				// If storage is not configured (e.g., local without GCS), skip generating public URL
+			if media.Kind == MediaKindImage {
+				// Use thumb_path if available, otherwise use gcs_path
+				pathToUse := media.GCSPath
+				if media.ThumbPath != nil && *media.ThumbPath != "" {
+					pathToUse = *media.ThumbPath
+				}
+
+				// If storage is configured, generate signed URL (valid for 1 hour)
 				if s.storage != nil {
-					publicURL := s.storage.GetPublicURL(*media.ThumbPath)
-					summary.ThumbnailURL = &publicURL
+					signedURL, err := s.storage.GetSecureURL(ctx, pathToUse, 1*time.Hour)
+					if err == nil {
+						summary.ThumbnailURL = &signedURL
+					}
 				}
 				break
 			}
@@ -733,8 +912,29 @@ func (s *Service) convertToSummary(ctx context.Context, product Product, vatSett
 
 // getProductWithDetails retrieves a product with all its details
 func (s *Service) getProductWithDetails(ctx context.Context, product *Product) (*ProductWithDetails, error) {
+	// Get current VAT settings from config manager
+	var vatRate float64 = 0.15 // Default VAT rate
+	if s.config != nil {
+		st := s.config.GetSettings()
+		if st.VATEnabled {
+			vatRate = st.VATRate
+		} else {
+			vatRate = 0.0
+		}
+	}
+
 	details := ProductWithDetails{
-		Product: *product,
+		ID:           product.ID,
+		Type:         product.Type,
+		Title:        product.Title,
+		Slug:         product.Slug,
+		Description:  product.Description,
+		PriceNet:     product.PriceNet,
+		PriceGross:   product.GetPriceGross(vatRate),
+		Status:       product.Status,
+		ThumbnailURL: product.ThumbnailURL,
+		CreatedAt:    product.CreatedAt,
+		UpdatedAt:    product.UpdatedAt,
 	}
 
 	// Get type-specific details
@@ -759,6 +959,27 @@ func (s *Service) getProductWithDetails(ctx context.Context, product *Product) (
 	if err != nil {
 		return nil, errs.E(ctx, "CAT_MEDIA_READ_FAILED", "فشل جلب الوسائط")
 	}
+
+	// Generate signed URLs for media (valid for 1 hour)
+	if s.storage != nil {
+		for i := range media {
+			// Generate signed URL for main image
+			signedURL, err := s.storage.GetSecureURL(ctx, media[i].GCSPath, 1*time.Hour)
+			if err == nil {
+				// Store signed URL in GCSPath temporarily for frontend
+				media[i].GCSPath = signedURL
+			}
+
+			// Generate signed URL for thumbnail if exists
+			if media[i].ThumbPath != nil && *media[i].ThumbPath != "" {
+				thumbURL, err := s.storage.GetSecureURL(ctx, *media[i].ThumbPath, 1*time.Hour)
+				if err == nil {
+					media[i].ThumbPath = &thumbURL
+				}
+			}
+		}
+	}
+
 	details.Media = media
 
 	return &details, nil

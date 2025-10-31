@@ -6,10 +6,10 @@ import "time"
 // RegisterRequest represents the user registration request
 // Phone is no longer provided here; it must be verified beforehand via /auth/phone/start and /auth/phone/verify
 type RegisterRequest struct {
-	Name                  string `json:"name" validate:"required"`
-	Email                 string `json:"email" validate:"required,email"`
-	CityID                int64  `json:"city_id" validate:"required,min=1"`
-	Password              string `json:"password" validate:"required,min=8"`
+	Name                   string `json:"name" validate:"required"`
+	Email                  string `json:"email" validate:"required,email"`
+	CityID                 int64  `json:"city_id" validate:"required,min=1"`
+	Password               string `json:"password" validate:"required,min=8"`
 	PhoneVerificationToken string `json:"phone_verification_token" validate:"required"`
 	// Deprecated: Phone is no longer accepted in the registration flow. Use /auth/phone/start and /auth/phone/verify.
 	Phone string `json:"phone,omitempty" validate:"-"`
@@ -39,12 +39,14 @@ type LoginResponse struct {
 
 // UserInfo represents user information
 type UserInfo struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`
-	Phone  string `json:"phone"`
-	CityID int64  `json:"city_id"`
-	Role   string `json:"role"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	Phone           string `json:"phone"`
+	CityID          int64  `json:"city_id"`
+	Role            string `json:"role"`
+	IsEmailVerified bool   `json:"is_email_verified"`
+	IsPhoneVerified bool   `json:"is_phone_verified"`
 }
 
 // VerifyEmailRequest represents the email verification request
@@ -61,12 +63,15 @@ type VerifyEmailResponse struct {
 
 // StartPhoneRequest starts phone verification by generating an OTP
 type StartPhoneRequest struct {
-	Phone string `json:"phone" validate:"required"`
+	Phone   string `json:"phone" validate:"required"`
+	DevMode bool   `json:"dev_mode,omitempty"` // If true, return OTP in response instead of sending SMS
 }
 
 type StartPhoneResponse struct {
 	Message string `json:"message"`
 	Success bool   `json:"success"`
+	DevMode bool   `json:"dev_mode,omitempty"` // Indicates if dev mode is active
+	Code    string `json:"code,omitempty"`     // OTP code (only in dev mode)
 }
 
 // VerifyPhoneRequest verifies the OTP and returns a short-lived token to be used during registration
@@ -93,6 +98,7 @@ type RefreshTokenResponse struct {
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	TokenType    string    `json:"token_type"`
+	User         UserInfo  `json:"user"`
 }
 
 // LogoutResponse represents the logout response
@@ -108,6 +114,27 @@ type ResendVerificationRequest struct {
 
 // ResendVerificationResponse represents the resend verification response
 type ResendVerificationResponse struct {
+	Message string `json:"message"`
+	Success bool   `json:"success"`
+}
+
+// RequestPasswordResetRequest represents a password reset request
+type RequestPasswordResetRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type RequestPasswordResetResponse struct {
+	Message string `json:"message"`
+	Success bool   `json:"success"`
+}
+
+// ResetPasswordRequest represents the password reset confirmation
+type ResetPasswordRequest struct {
+	Token       string `json:"token" validate:"required"`
+	NewPassword string `json:"new_password" validate:"required,min=8"`
+}
+
+type ResetPasswordResponse struct {
 	Message string `json:"message"`
 	Success bool   `json:"success"`
 }
