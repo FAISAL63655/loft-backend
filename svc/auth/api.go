@@ -142,9 +142,13 @@ func refreshCookieName() string { return "refresh_token" }
 
 func setRefreshCookie(w http.ResponseWriter, token string) {
 	secure := true
+	sameSite := http.SameSiteNoneMode // للسماح بـ cross-domain cookies (Vercel → Encore Cloud)
+
 	if encore.Meta().Environment.Type == encore.EnvDevelopment && encore.Meta().Environment.Cloud == encore.CloudLocal {
 		secure = false
+		sameSite = http.SameSiteLaxMode // في التطوير المحلي نستخدم Lax
 	}
+
 	cookie := &http.Cookie{
 		Name:     refreshCookieName(),
 		Value:    token,
@@ -152,7 +156,7 @@ func setRefreshCookie(w http.ResponseWriter, token string) {
 		MaxAge:   int(authn.RefreshTokenDuration.Seconds()),
 		Secure:   secure,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: sameSite,
 	}
 	http.SetCookie(w, cookie)
 }
