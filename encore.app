@@ -3,7 +3,7 @@
   "build": {
     "cgo_enabled": false
   },
-  "cors": {
+  "global_cors": {
     "debug": true,
     "allow_headers": [
       // أضفنا الشكلين لحساسية بعض المزودين لحالة الأحرف
