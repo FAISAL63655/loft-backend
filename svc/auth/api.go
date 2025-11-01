@@ -41,13 +41,13 @@ func (s *Service) LoginRaw(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req LoginRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_argument", "invalid request body")
+		writeError(w, r, http.StatusBadRequest, "invalid_argument", "invalid request body")
 		return
 	}
 
 	resp, err := s.LoginUser(ctx, &req)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthenticated", err.Error())
+		writeError(w, r, http.StatusUnauthorized, "unauthenticated", err.Error())
 		return
 	}
 
@@ -62,7 +62,7 @@ func (s *Service) LoginRaw(w http.ResponseWriter, r *http.Request) {
 
 	// Do not return refresh token in body
 	resp.RefreshToken = ""
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // VerifyEmail verifies a user's email address
@@ -80,20 +80,20 @@ func (s *Service) RefreshRaw(w http.ResponseWriter, r *http.Request) {
 	// Read refresh token from cookie
 	cookie, err := r.Cookie(refreshCookieName())
 	if err != nil || cookie.Value == "" {
-		writeError(w, http.StatusUnauthorized, "unauthenticated", "missing refresh cookie")
+		writeError(w, r, http.StatusUnauthorized, "unauthenticated", "missing refresh cookie")
 		return
 	}
 
 	resp, err := s.RefreshUserToken(ctx, &RefreshTokenRequest{RefreshToken: cookie.Value})
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthenticated", err.Error())
+		writeError(w, r, http.StatusUnauthorized, "unauthenticated", err.Error())
 		return
 	}
 
 	// Rotate refresh cookie
 	setRefreshCookie(w, resp.RefreshToken)
 	resp.RefreshToken = ""
-	writeJSON(w, resp)
+	writeJSON(w, r, resp)
 }
 
 // Logout invalidates the user's session and tokens
@@ -165,11 +165,35 @@ func sessionCookieEnabled() bool { return false }
 
 // minimal JSON helpers (avoid external deps)
 func decodeJSON(r *http.Request, v interface{}) error { return json.NewDecoder(r.Body).Decode(v) }
-func writeJSON(w http.ResponseWriter, v interface{}) {
+
+var allowedOrigins = map[string]struct{}{
+	"http://localhost:3000":                {},
+	"http://127.0.0.1:3000":                {},
+	"http://localhost:3001":                {},
+	"http://127.0.0.1:3001":                {},
+	"https://loft-frontend-chi.vercel.app": {},
+	"https://loft-frontend-v3.vercel.app":  {},
+}
+
+func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+	if _, ok := allowedOrigins[origin]; ok {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+}
+
+func writeJSON(w http.ResponseWriter, r *http.Request, v interface{}) {
+	setCORSHeaders(w, r)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
-func writeError(w http.ResponseWriter, status int, code, message string) {
+func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	setCORSHeaders(w, r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
