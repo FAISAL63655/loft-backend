@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"encore.dev"
 	"encore.dev/beta/auth"
 	"encore.dev/storage/sqldb"
 
@@ -263,7 +264,15 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 			frontendBase = preferred
 		}
 	}
-	successURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, invoiceID)
+	// في بيئات غير التطوير/المحلي، لا نسمح بالتحويل إلى localhost
+	if encore.Meta().Environment.Type != encore.EnvLocal && encore.Meta().Environment.Type != encore.EnvDevelopment {
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.0.0.1") {
+			frontendBase = "https://loft-frontend-v3.vercel.app"
+		}
+	}
+
+	// استخدم مسار موحّد لمعالجة نتيجة الدفع
+	successURL := fmt.Sprintf("%s/checkout/callback?invoice_id=%d", frontendBase, invoiceID)
 	backURL := fmt.Sprintf("%s/checkout", frontendBase)
 	// Server-to-server callback is configured in Moyasar dashboard; leave empty here
 	callbackURL := ""
@@ -291,8 +300,8 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 	// Create payment record in database (critical for webhook processing)
 	var dbPaymentID int64
 	if err := db.Stdlib().QueryRowContext(ctx, `
-		INSERT INTO payments (invoice_id, gateway, gateway_ref, status, currency, amount_authorized, raw_response) 
-		VALUES ($1, 'moyasar', $2, 'initiated', 'SAR', $3, '{}') 
+		INSERT INTO payments (invoice_id, gateway, gateway_ref, status, currency, amount_authorized, raw_response)
+		VALUES ($1, 'moyasar', $2, 'initiated', 'SAR', $3, '{}')
 		RETURNING id
 	`, invoiceID, gatewayRef, totalGross).Scan(&dbPaymentID); err != nil {
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء سجل الدفع: " + err.Error()}
@@ -301,9 +310,9 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 	// Update invoice with payment info and set status to payment_in_progress
 	nowUTC := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Stdlib().ExecContext(ctx, `
-		UPDATE invoices 
+		UPDATE invoices
 		SET status = 'payment_in_progress',
-		    totals = COALESCE(totals, '{}'::jsonb) 
+		    totals = COALESCE(totals, '{}'::jsonb)
 		             || jsonb_build_object(
 		                'idem_key',       $1::text,
 		                'payment_id',     $2::bigint,

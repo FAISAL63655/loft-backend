@@ -148,17 +148,58 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	// Determine frontend base URL (from settings CORS origins) with safe fallback
 	frontendBase := "http://localhost:3000"
 	if s := config.GetSettings(); s != nil && len(s.CORSAllowedOrigins) > 0 {
+		preferred := ""
+		// 1) Prefer the production Vercel domain
 		for _, o := range s.CORSAllowedOrigins {
 			o = strings.TrimSpace(o)
-			if o != "" && o != "*" {
-				frontendBase = strings.TrimRight(o, "/")
+			if o != "" && o != "*" && strings.Contains(o, "loft-frontend-v3.vercel.app") {
+				preferred = strings.TrimRight(o, "/")
 				break
 			}
 		}
+		// 2) Otherwise prefer any domain containing -v3.
+		if preferred == "" {
+			for _, o := range s.CORSAllowedOrigins {
+				o = strings.TrimSpace(o)
+				if o != "" && o != "*" && strings.Contains(o, "-v3.") {
+					preferred = strings.TrimRight(o, "/")
+					break
+				}
+			}
+		}
+		// 3) Otherwise pick the first non-admin domain
+		if preferred == "" {
+			for _, o := range s.CORSAllowedOrigins {
+				o = strings.TrimSpace(o)
+				if o != "" && o != "*" && !strings.Contains(o, "admin.") {
+					preferred = strings.TrimRight(o, "/")
+					break
+				}
+			}
+		}
+		// 4) Apply preferred; fallback to first valid origin
+		if preferred != "" {
+			frontendBase = preferred
+		} else {
+			for _, o := range s.CORSAllowedOrigins {
+				o = strings.TrimSpace(o)
+				if o != "" && o != "*" {
+					frontendBase = strings.TrimRight(o, "/")
+					break
+				}
+			}
+		}
 	}
+	// 404 4444/2434342 44 44 24 2424 24 localhost
+	if encore.Meta().Environment.Type != encore.EnvLocal && encore.Meta().Environment.Type != encore.EnvDevelopment {
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.0.0.1") {
+			frontendBase = "https://loft-frontend-v3.vercel.app"
+		}
+	}
+
 	// returnURL: where user is redirected after payment (browser redirect from Moyasar)
 	// Include payment_id placeholder - Moyasar will append its own params (id, status, etc)
-	returnURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, req.InvoiceID)
+	returnURL := fmt.Sprintf("%s/checkout/callback?invoice_id=%d", frontendBase, req.InvoiceID)
 
 	// callbackURL: same as returnURL - Moyasar uses this for browser redirect after payment completion
 	callbackURL := returnURL
@@ -198,9 +239,9 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	// Update invoice to payment_in_progress and store session metadata (incl. start time)
 	nowUTC := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Stdlib().ExecContext(ctx, `
-		UPDATE invoices 
-		SET status='payment_in_progress', 
-			totals = COALESCE(totals,'{}'::jsonb) 
+		UPDATE invoices
+		SET status='payment_in_progress',
+			totals = COALESCE(totals,'{}'::jsonb)
 					|| jsonb_build_object(
 						'pay_idem_key', $1::text,
 						'pay_method',   $2::text,
@@ -626,7 +667,7 @@ func MoyasarWebhook(w http.ResponseWriter, r *http.Request) {
 		_, _ = db.Stdlib().ExecContext(r.Context(),
 			`UPDATE payments SET raw_response = jsonb_build_object('raw', $1::text, 'ct', $2::text), updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
              WHERE id = (
-               SELECT id FROM payments 
+               SELECT id FROM payments
                WHERE invoice_id=$3 AND status IN ('initiated','pending') AND gateway='moyasar'
                ORDER BY created_at DESC
                LIMIT 1
@@ -651,7 +692,7 @@ func MoyasarWebhook(w http.ResponseWriter, r *http.Request) {
 		res, err := db.Stdlib().ExecContext(r.Context(),
 			`UPDATE payments SET gateway_ref=$1, updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
              WHERE id = (
-               SELECT id FROM payments 
+               SELECT id FROM payments
                WHERE invoice_id=$2 AND gateway='moyasar' AND status IN ('initiated','pending') AND (gateway_ref IS NULL OR gateway_ref='')
                ORDER BY created_at DESC
                LIMIT 1
