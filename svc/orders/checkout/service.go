@@ -227,11 +227,21 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 	// Convert to halalas (smallest currency unit)
 	amountHalalas := int(totalGross * 100)
 
-	// Build Moyasar URLs
-	baseURL := "http://localhost:3000" // TODO: Use environment variable
-	successURL := baseURL + "/checkout/callback"
-	backURL := baseURL + "/checkout"
-	callbackURL := baseURL + "/api/moyasar/webhook"
+	// Build Moyasar URLs dynamically from config (fallback to localhost in dev)
+	frontendBase := "http://localhost:3000"
+	if s := config.GetSettings(); s != nil && len(s.CORSAllowedOrigins) > 0 {
+		for _, o := range s.CORSAllowedOrigins {
+			o = strings.TrimSpace(o)
+			if o != "" && o != "*" {
+				frontendBase = strings.TrimRight(o, "/")
+				break
+			}
+		}
+	}
+	successURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, invoiceID)
+	backURL := fmt.Sprintf("%s/checkout", frontendBase)
+	// Server-to-server callback is configured in Moyasar dashboard; leave empty here
+	callbackURL := ""
 
 	// Create payment in Moyasar
 	description := fmt.Sprintf("Order #%d - Invoice #%s", orderID, invoiceNumber)
