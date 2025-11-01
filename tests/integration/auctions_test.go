@@ -385,10 +385,11 @@ func TestCancelAuction(t *testing.T) {
 func cleanupAuctionTestData(t *testing.T, db *sqldb.Database) {
 	ctx := context.Background()
 	queries := []string{
-		"DELETE FROM bids WHERE auction_id IN (SELECT id FROM auctions)",
-		"DELETE FROM auctions",
-		"DELETE FROM pigeons WHERE product_id IN (SELECT id FROM products WHERE title='Test Pigeon')",
-		"DELETE FROM products WHERE title='Test Pigeon'",
+		// احذف فقط بيانات المزادات التي أنشأتها هذه الاختبارات (تجنُّب التأثير على اختبارات E2E)
+		"DELETE FROM bids WHERE auction_id IN (SELECT id FROM auctions WHERE product_id IN (SELECT id FROM products WHERE title='Test Pigeon' OR slug LIKE 'test-pigeon-%'))",
+		"DELETE FROM auctions WHERE product_id IN (SELECT id FROM products WHERE title='Test Pigeon' OR slug LIKE 'test-pigeon-%')",
+		"DELETE FROM pigeons WHERE product_id IN (SELECT id FROM products WHERE title='Test Pigeon' OR slug LIKE 'test-pigeon-%')",
+		"DELETE FROM products WHERE title='Test Pigeon' OR slug LIKE 'test-pigeon-%'",
 		"DELETE FROM email_verification_codes WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test_%@example.com' OR email LIKE '%bidder%@example.com')",
 		"DELETE FROM verification_requests WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test_%@example.com' OR email LIKE '%bidder%@example.com')",
 		"DELETE FROM addresses WHERE user_id IN (SELECT id FROM users WHERE email LIKE 'test_%@example.com' OR email LIKE '%bidder%@example.com')",

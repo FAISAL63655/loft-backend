@@ -66,7 +66,8 @@ func seedPigeonProduct(t *testing.T) int64 {
 }
 
 func TestEndToEnd_FullFlow(t *testing.T) {
-	t.Parallel()
+	// ملاحظة: تشغيل هذا الاختبار بالتوازي قد يتداخل مع اختبارات التكامل التي تنظف الجداول.
+	// لذلك نتجنب t.Parallel() لضمان عدم حذف بيانات المزاد أثناء التنفيذ.
 
 	// 1) Seed core actors
 	adminID := seedAdmin(t)
