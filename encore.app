@@ -22,17 +22,17 @@
       "http://127.0.0.1:3000",
       "http://localhost:3001",
       "http://127.0.0.1:3001",
-      "https://loft-frontend-chi.vercel.app",
-      "https://loft-frontend-v3.vercel.app"
+      "https://loft-frontend-v3.vercel.app",
+      "https://loft-frontend-chi.vercel.app"
     ],
     "allow_origins_with_credentials": [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
       "http://localhost:3001",
       "http://127.0.0.1:3001",
-      "https://loft-frontend-chi.vercel.app",
+      "https://loft-frontend-v3.vercel.app",
       "https://admin.example.com",
-      "https://loft-frontend-v3.vercel.app"
+      "https://loft-frontend-chi.vercel.app"
     ]
   }
 }

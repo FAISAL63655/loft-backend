@@ -36,6 +36,13 @@ var secrets struct {
 //
 //encore:api auth raw method=POST path=/media-drafts/:session_id
 func UploadMediaDraft(w http.ResponseWriter, req *http.Request) {
+	// CORS preflight for raw endpoint
+	if req.Method == http.MethodOptions {
+		handlePreflight(w, req, "POST, OPTIONS")
+		return
+	}
+	// Ensure CORS headers on actual response
+	setCORSHeaders(w, req)
 	ctx := req.Context()
 
 	// Initialize service if needed
@@ -431,6 +438,12 @@ func DeleteProduct(ctx context.Context, id string) (*DeleteProductResponse, erro
 //
 //encore:api auth raw method=POST path=/products/:id/media
 func UploadProductMedia(w http.ResponseWriter, req *http.Request) {
+	// CORS preflight for raw endpoint
+	if req.Method == http.MethodOptions {
+		handlePreflight(w, req, "POST, OPTIONS")
+		return
+	}
+	setCORSHeaders(w, req)
 	ctx := req.Context()
 
 	// Initialize service if needed
@@ -918,4 +931,45 @@ func writeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+// --- CORS helpers for raw endpoints ---
+func allowedOrigin(origin string) bool {
+	if strings.TrimSpace(origin) == "" {
+		return false
+	}
+	s := config.GetSettings()
+	if s == nil || len(s.CORSAllowedOrigins) == 0 {
+		return false
+	}
+	for _, o := range s.CORSAllowedOrigins {
+		if strings.TrimSpace(o) == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+	if allowedOrigin(origin) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+	}
+}
+
+func handlePreflight(w http.ResponseWriter, r *http.Request, methods string) {
+	setCORSHeaders(w, r)
+	// Allow headers from config if set, fallback to common ones
+	headers := "Authorization, Content-Type, X-Requested-With, Idempotency-Key"
+	if s := config.GetSettings(); s != nil && len(s.CORSAllowedHeaders) > 0 {
+		headers = strings.Join(s.CORSAllowedHeaders, ", ")
+	}
+	w.Header().Set("Access-Control-Allow-Headers", headers)
+	w.Header().Set("Access-Control-Allow-Methods", methods)
+	w.WriteHeader(http.StatusNoContent)
 }

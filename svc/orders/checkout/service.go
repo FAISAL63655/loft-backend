@@ -230,12 +230,37 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 	// Build Moyasar URLs dynamically from config (fallback to localhost in dev)
 	frontendBase := "http://localhost:3000"
 	if s := config.GetSettings(); s != nil && len(s.CORSAllowedOrigins) > 0 {
+		preferred := ""
+		// 1) فضّل نطاق v3 إن وُجد
 		for _, o := range s.CORSAllowedOrigins {
 			o = strings.TrimSpace(o)
-			if o != "" && o != "*" {
-				frontendBase = strings.TrimRight(o, "/")
+			if o != "" && o != "*" && strings.Contains(o, "loft-frontend-v3.vercel.app") {
+				preferred = strings.TrimRight(o, "/")
 				break
 			}
+		}
+		// 2) إن لم يوجد، فضّل أي نطاق يحتوي -v3
+		if preferred == "" {
+			for _, o := range s.CORSAllowedOrigins {
+				o = strings.TrimSpace(o)
+				if o != "" && o != "*" && strings.Contains(o, "-v3.") {
+					preferred = strings.TrimRight(o, "/")
+					break
+				}
+			}
+		}
+		// 3) وإلّا اختر أول نطاق صالح غير admin
+		if preferred == "" {
+			for _, o := range s.CORSAllowedOrigins {
+				o = strings.TrimSpace(o)
+				if o != "" && o != "*" && !strings.Contains(o, "admin.") {
+					preferred = strings.TrimRight(o, "/")
+					break
+				}
+			}
+		}
+		if preferred != "" {
+			frontendBase = preferred
 		}
 	}
 	successURL := fmt.Sprintf("%s/checkout/pending?invoice_id=%d", frontendBase, invoiceID)
