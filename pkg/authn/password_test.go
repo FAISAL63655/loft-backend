@@ -183,18 +183,18 @@ func TestIsValidPassword(t *testing.T) {
 		},
 		{
 			name:     "too long",
-			password: strings.Repeat("a", 129) + "1",
+			password: strings.Repeat("a", 129),
 			want:     false,
 		},
 		{
-			name:     "no numbers",
+			name:     "valid - letters only (8+ chars)",
 			password: "PasswordOnly",
-			want:     false,
+			want:     true,
 		},
 		{
-			name:     "no letters",
+			name:     "valid - numbers only (8+ chars)",
 			password: "12345678",
-			want:     false,
+			want:     true,
 		},
 		{
 			name:     "empty password",
@@ -202,19 +202,29 @@ func TestIsValidPassword(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "only special characters",
+			name:     "valid - special characters only (8+ chars)",
 			password: "!@#$%^&*()",
-			want:     false,
+			want:     true,
 		},
 		{
-			name:     "arabic with numbers",
+			name:     "valid - arabic with numbers",
 			password: "كلمة_مرور123",
 			want:     true,
 		},
 		{
-			name:     "mixed case with numbers",
+			name:     "valid - mixed case with numbers",
 			password: "MyPassword123",
 			want:     true,
+		},
+		{
+			name:     "valid - exactly 8 characters",
+			password: "abcdefgh",
+			want:     true,
+		},
+		{
+			name:     "invalid - 7 characters",
+			password: "abcdefg",
+			want:     false,
 		},
 	}
 
