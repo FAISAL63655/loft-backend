@@ -6,14 +6,15 @@
   "cors": {
     "debug": true,
     "allow_headers": [
-      "content-type",
-      "authorization",
-      "accept",
-      "accept-language",
-      "x-csrf-token",
-      "x-timezone",
-      "idempotency-key",
-      "x-requested-with"
+      // أضفنا الشكلين لحساسية بعض المزودين لحالة الأحرف
+      "authorization", "Authorization",
+      "content-type", "Content-Type",
+      "accept", "Accept",
+      "accept-language", "Accept-Language",
+      "x-csrf-token", "X-CSRF-Token",
+      "x-timezone", "X-Timezone",
+      "idempotency-key", "Idempotency-Key",
+      "x-requested-with", "X-Requested-With"
     ],
     "expose_headers": ["*"],
     "allow_origins_without_credentials": [
