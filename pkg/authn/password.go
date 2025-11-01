@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -154,18 +153,6 @@ func IsValidPassword(password string) bool {
 		return false
 	}
 
-	// Require at least one letter (supports Unicode, e.g. Arabic) and one digit
-	var hasLetter, hasDigit bool
-	for _, r := range password {
-		if unicode.IsLetter(r) {
-			hasLetter = true
-		} else if unicode.IsDigit(r) {
-			hasDigit = true
-		}
-		if hasLetter && hasDigit {
-			break
-		}
-	}
-
-	return hasLetter && hasDigit
+	// Password is valid if it's 8-128 characters (no other requirements)
+	return true
 }
