@@ -90,18 +90,26 @@ func (c *TwilioClient) SendSMS(ctx context.Context, to, message string) error {
 // If VerifyServiceID is configured, uses Twilio Verify API (recommended)
 // Otherwise falls back to direct SMS sending
 func (c *TwilioClient) SendOTP(ctx context.Context, phone, code string) error {
+	logger.Info(ctx, "📱 SendOTP called", logger.Fields{
+		"phone":              phone,
+		"dev_mode":           c.config.DevMode,
+		"has_verify_service": c.config.VerifyServiceID != "",
+	})
+
 	// Dev mode: just log the OTP
 	if c.config.DevMode {
-		logger.Info(ctx, "📱 [DEV MODE] OTP", logger.Fields{"to": phone, "code": code})
+		logger.Info(ctx, "📱 [DEV MODE] OTP - Not sending actual SMS", logger.Fields{"to": phone, "code": code})
 		return nil
 	}
 
 	// Use Twilio Verify if configured
 	if c.config.VerifyServiceID != "" {
+		logger.Info(ctx, "📱 Using Twilio Verify", logger.Fields{"phone": phone, "service_id": c.config.VerifyServiceID})
 		return c.sendVerifyOTP(ctx, phone, code)
 	}
 
 	// Fallback to direct SMS
+	logger.Info(ctx, "📱 Using direct SMS (fallback)", logger.Fields{"phone": phone, "from": c.config.FromNumber})
 	message := fmt.Sprintf("رمز التحقق الخاص بك في لوفت الدغيري: %s\nصالح لمدة 10 دقائق", code)
 	return c.SendSMS(ctx, phone, message)
 }

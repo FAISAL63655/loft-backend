@@ -92,6 +92,16 @@ func initService() (*Service, error) {
 	}
 	smsClient := sms.NewTwilioClient(twilioConfig)
 
+	// Log Twilio configuration status at startup
+	logger.Info(context.Background(), "📱 Twilio SMS Client Initialized", logger.Fields{
+		"dev_mode":           devMode,
+		"has_account_sid":    secrets.TwilioAccountSID != "",
+		"has_auth_token":     secrets.TwilioAuthToken != "",
+		"has_from_number":    secrets.TwilioFromNumber != "",
+		"has_verify_service": secrets.TwilioVerifyService != "",
+		"sms_dev_mode_env":   os.Getenv("SMS_DEV_MODE"),
+	})
+
 	return &Service{
 		repo:                repo,
 		jwtManager:          jwtManager,
@@ -252,11 +262,21 @@ func (s *Service) StartPhoneRegistration(ctx context.Context, req *StartPhoneReq
 	// Check if using Twilio Verify or custom OTP
 	usingTwilioVerify := !s.smsClient.IsDevMode() && s.smsClient.HasVerifyService()
 
+	// Log decision path for debugging
+	logger.Info(ctx, "📱 Phone verification flow decision", logger.Fields{
+		"phone":               req.Phone,
+		"is_dev_mode":         s.smsClient.IsDevMode(),
+		"has_verify_service":  s.smsClient.HasVerifyService(),
+		"using_twilio_verify": usingTwilioVerify,
+		"request_dev_mode":    req.DevMode,
+	})
+
 	var code string
 
 	if usingTwilioVerify {
 		// Twilio Verify handles OTP generation and storage
 		// We don't need to generate or store the code ourselves
+		logger.Info(ctx, "📱 Using Twilio Verify to send OTP", logger.Fields{"phone": req.Phone})
 		if err := s.smsClient.SendOTP(ctx, req.Phone, ""); err != nil {
 			logger.Error(ctx, "Failed to send Twilio Verify OTP", logger.Fields{"error": err.Error()})
 			return nil, NewInternalError("فشل إرسال رمز التحقق. يرجى المحاولة مرة أخرى.")
@@ -277,6 +297,7 @@ func (s *Service) StartPhoneRegistration(ctx context.Context, req *StartPhoneReq
 	}
 
 	// Custom OTP flow (dev mode or fallback)
+	logger.Info(ctx, "📱 Using custom OTP flow", logger.Fields{"phone": req.Phone})
 	code, err = generate4DigitCode()
 	if err != nil {
 		return nil, NewInternalError("Failed to generate verification code.")
@@ -291,8 +312,15 @@ func (s *Service) StartPhoneRegistration(ctx context.Context, req *StartPhoneReq
 	// Check if user requested dev mode OR if system is in dev mode
 	useDevMode := req.DevMode || s.smsClient.IsDevMode()
 
+	logger.Info(ctx, "📱 Dev mode check", logger.Fields{
+		"request_dev_mode": req.DevMode,
+		"system_dev_mode":  s.smsClient.IsDevMode(),
+		"use_dev_mode":     useDevMode,
+	})
+
 	if useDevMode {
 		// Dev mode: return OTP in response
+		logger.Info(ctx, "📱 [DEV MODE] Returning OTP in response", logger.Fields{"code": code})
 		return &StartPhoneResponse{
 			Message: fmt.Sprintf("🔧 [DEV MODE] رمز التفعيل: %s (صالح لمدة 10 دقائق)", code),
 			Success: true,
@@ -302,11 +330,13 @@ func (s *Service) StartPhoneRegistration(ctx context.Context, req *StartPhoneReq
 	}
 
 	// Production mode: send OTP via SMS (fallback)
+	logger.Info(ctx, "📱 Sending SMS OTP (production mode)", logger.Fields{"phone": req.Phone})
 	if err := s.smsClient.SendOTP(ctx, req.Phone, code); err != nil {
 		logger.Error(ctx, "Failed to send SMS OTP", logger.Fields{"error": err.Error()})
 		return nil, NewInternalError("فشل إرسال رمز التحقق. يرجى المحاولة مرة أخرى.")
 	}
 
+	logger.Info(ctx, "📱 SMS OTP sent successfully", logger.Fields{"phone": req.Phone})
 	return &StartPhoneResponse{
 		Message: "تم إرسال رمز التفعيل إلى جوالك (صالح لمدة 10 دقائق)",
 		Success: true,
