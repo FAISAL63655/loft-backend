@@ -166,6 +166,30 @@ func (s *Service) ProcessVerificationRequest(ctx context.Context, userID int64, 
 	}, nil
 }
 
+// GetVerificationRequestByUserID retrieves the current verification request for a user
+func (s *Service) GetVerificationRequestByUserID(ctx context.Context, userID int64) (*VerificationRequestDetail, error) {
+	// Get the latest verification request for this user
+	verificationReq, err := s.repo.GetLatestVerificationRequestByUserID(ctx, userID)
+	if err != nil {
+		// Check if it's a NotFound error (no verification request exists)
+		if e, ok := err.(*errs.Error); ok && e.Code == errs.NotFound {
+			return nil, err // Return the NotFound error as-is
+		}
+		// For other errors, return them as-is
+		return nil, err
+	}
+
+	return &VerificationRequestDetail{
+		ID:          verificationReq.ID,
+		UserID:      verificationReq.UserID,
+		Note:        verificationReq.Note,
+		Status:      verificationReq.Status,
+		AdminReason: verificationReq.AdminReason,
+		CreatedAt:   verificationReq.CreatedAt,
+		UpdatedAt:   verificationReq.UpdatedAt,
+	}, nil
+}
+
 // ProcessVerificationApproval approves a verification request (Admin only)
 func (s *Service) ProcessVerificationApproval(ctx context.Context, requestID, adminUserID int64, req *ReviewVerificationRequest) (*ReviewVerificationResponse, error) {
 	// Check if admin user has admin role
@@ -193,7 +217,11 @@ func (s *Service) ProcessVerificationApproval(ctx context.Context, requestID, ad
 	}
 
 	// Approve verification request and update user role
-	err = s.repo.ApproveVerificationRequest(ctx, requestID, adminUserID, verificationReq.UserID)
+	adminReason := ""
+	if req.Reason != "" {
+		adminReason = req.Reason
+	}
+	err = s.repo.ApproveVerificationRequest(ctx, requestID, adminUserID, verificationReq.UserID, adminReason)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +286,11 @@ func (s *Service) ProcessVerificationRejection(ctx context.Context, requestID, a
 	}
 
 	// Reject verification request
-	err = s.repo.RejectVerificationRequest(ctx, requestID, adminUserID)
+	adminReason := ""
+	if req.Reason != "" {
+		adminReason = req.Reason
+	}
+	err = s.repo.RejectVerificationRequest(ctx, requestID, adminUserID, adminReason)
 	if err != nil {
 		return nil, err
 	}

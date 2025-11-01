@@ -41,6 +41,17 @@ type VerificationRequest struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+// VerificationRequestDetail represents a detailed verification request with admin_reason
+type VerificationRequestDetail struct {
+	ID          int64      `json:"id"`
+	UserID      int64      `json:"user_id"`
+	Note        string     `json:"note"`
+	Status      string     `json:"status"` // pending, approved, rejected
+	AdminReason *string    `json:"admin_reason"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
 // VerificationRequestInput represents the verification request creation
 type VerificationRequestInput struct {
 	Note string `json:"note" validate:"required,min=10,max=500"`

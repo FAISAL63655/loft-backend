@@ -98,10 +98,16 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 		}
 	}()
 
-	// Create order
+	// Create order with address_id
 	var orderID int64
-	if err = tx.QueryRowContext(ctx, `INSERT INTO orders (user_id, source) VALUES ($1,'direct') RETURNING id`, userID).Scan(&orderID); err != nil {
-		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الطلب"}
+	if req.AddressID != nil && *req.AddressID > 0 {
+		if err = tx.QueryRowContext(ctx, `INSERT INTO orders (user_id, source, address_id) VALUES ($1,'direct',$2) RETURNING id`, userID, *req.AddressID).Scan(&orderID); err != nil {
+			return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الطلب"}
+		}
+	} else {
+		if err = tx.QueryRowContext(ctx, `INSERT INTO orders (user_id, source) VALUES ($1,'direct') RETURNING id`, userID).Scan(&orderID); err != nil {
+			return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء الطلب"}
+		}
 	}
 
 	// Build items from cart_items
@@ -228,46 +234,56 @@ func Checkout(ctx context.Context, req *CheckoutRequest) (*CheckoutResponse, err
 	// Convert to halalas (smallest currency unit)
 	amountHalalas := int(totalGross * 100)
 
-	// Build Moyasar URLs dynamically from config (fallback to localhost in dev)
+	// **********************
+	// اختيار الدومين للـ URLs
+	// **********************
+	// القيمة الافتراضية للتطوير فقط:
 	frontendBase := "http://localhost:3000"
+
 	if s := config.GetSettings(); s != nil && len(s.CORSAllowedOrigins) > 0 {
-		preferred := ""
-		// 1) فضّل نطاق v3 إن وُجد
+		// 1) فضّل www.dughairiloft.com إن وُجد صراحة
 		for _, o := range s.CORSAllowedOrigins {
 			o = strings.TrimSpace(o)
-			if o != "" && o != "*" && strings.Contains(o, "loft-frontend-v3.vercel.app") {
-				preferred = strings.TrimRight(o, "/")
+			if o != "" && o != "*" && strings.Contains(o, "www.dughairiloft.com") {
+				frontendBase = strings.TrimRight(o, "/")
 				break
 			}
 		}
-		// 2) إن لم يوجد، فضّل أي نطاق يحتوي -v3
-		if preferred == "" {
+		// 2) إن لم توجد www، خذ أي نطاق يحتوي dughairiloft.com
+		if !strings.Contains(frontendBase, "dughairiloft.com") {
 			for _, o := range s.CORSAllowedOrigins {
 				o = strings.TrimSpace(o)
-				if o != "" && o != "*" && strings.Contains(o, "-v3.") {
-					preferred = strings.TrimRight(o, "/")
+				if o != "" && o != "*" && strings.Contains(o, "dughairiloft.com") {
+					frontendBase = strings.TrimRight(o, "/")
 					break
 				}
 			}
 		}
-		// 3) وإلّا اختر أول نطاق صالح غير admin
-		if preferred == "" {
+		// 3) لو ما لقينا دغميري، خذ أول نطاق صالح غير admin (غالبًا للمعاينة/التطوير)
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.") {
 			for _, o := range s.CORSAllowedOrigins {
 				o = strings.TrimSpace(o)
 				if o != "" && o != "*" && !strings.Contains(o, "admin.") {
-					preferred = strings.TrimRight(o, "/")
+					frontendBase = strings.TrimRight(o, "/")
 					break
 				}
 			}
 		}
-		if preferred != "" {
-			frontendBase = preferred
-		}
 	}
-	// في بيئات غير التطوير/المحلي، لا نسمح بالتحويل إلى localhost
+
+	// في بيئات غير التطوير/المحلي: امنع localhost واجبر دومين الإنتاج
 	if encore.Meta().Environment.Type != encore.EnvLocal && encore.Meta().Environment.Type != encore.EnvDevelopment {
-		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.0.0.1") {
-			frontendBase = "https://loft-frontend-v3.vercel.app"
+		// أي localhost/127.* → يحوَّل لدومينك
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.") {
+			frontendBase = "https://www.dughairiloft.com"
+		}
+		// لو باقي على vercel.app → حوّله لدومينك
+		if strings.Contains(frontendBase, "vercel.app") {
+			frontendBase = "https://www.dughairiloft.com"
+		}
+		// تأكد أنها https
+		if strings.HasPrefix(frontendBase, "http://www.dughairiloft.com") {
+			frontendBase = "https://www.dughairiloft.com"
 		}
 	}
 

@@ -167,12 +167,14 @@ func sessionCookieEnabled() bool { return false }
 func decodeJSON(r *http.Request, v interface{}) error { return json.NewDecoder(r.Body).Decode(v) }
 
 var allowedOrigins = map[string]struct{}{
+	"https://www.dughairiloft.com":         {},
+	"https://dughairiloft.com":             {},
 	"http://localhost:3000":                {},
 	"http://127.0.0.1:3000":                {},
 	"http://localhost:3001":                {},
 	"http://127.0.0.1:3001":                {},
-	"https://loft-frontend-chi.vercel.app": {},
 	"https://loft-frontend-v3.vercel.app":  {},
+	"https://loft-frontend-chi.vercel.app": {},
 }
 
 func setCORSHeaders(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +194,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
+
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
 	setCORSHeaders(w, r)
 	w.Header().Set("Content-Type", "application/json")

@@ -6,7 +6,6 @@
   "global_cors": {
     "debug": true,
     "allow_headers": [
-      // أضفنا الشكلين لحساسية بعض المزودين لحالة الأحرف
       "authorization", "Authorization",
       "content-type", "Content-Type",
       "accept", "Accept",
@@ -18,6 +17,7 @@
     ],
     "expose_headers": ["*"],
     "allow_origins_without_credentials": [
+      "https://www.dughairiloft.com",
       "http://localhost:3000",
       "http://127.0.0.1:3000",
       "http://localhost:3001",
@@ -26,6 +26,7 @@
       "https://loft-frontend-chi.vercel.app"
     ],
     "allow_origins_with_credentials": [
+      "https://www.dughairiloft.com",
       "http://localhost:3000",
       "http://127.0.0.1:3000",
       "http://localhost:3001",

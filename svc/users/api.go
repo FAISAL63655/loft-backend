@@ -99,6 +99,25 @@ func (s *Service) CreateVerificationRequest(ctx context.Context, req *Verificati
 	return s.ProcessVerificationRequest(ctx, userIDInt64, req)
 }
 
+// GetMyVerificationRequest returns the current user's verification request if it exists
+//
+//encore:api auth method=GET path=/verify/my-request
+func (s *Service) GetMyVerificationRequest(ctx context.Context) (*VerificationRequestDetail, error) {
+	// Get user ID from auth context
+	userID, ok := auth.UserID()
+	if !ok {
+		return nil, &errs.Error{Code: errs.Unauthenticated, Message: "المستخدم غير مصادق."}
+	}
+
+	// Convert auth.UID (string) to int64
+	userIDInt64, err := strconv.ParseInt(string(userID), 10, 64)
+	if err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: "معرّف المستخدم غير صالح."}
+	}
+
+	return s.GetVerificationRequestByUserID(ctx, userIDInt64)
+}
+
 // ApproveVerificationRequest approves a verification request (Admin only)
 //
 //encore:api auth method=POST path=/verify/requests/:id/approve

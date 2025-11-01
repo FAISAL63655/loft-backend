@@ -65,13 +65,15 @@ type User struct {
 
 // VerificationRequestDB represents a verification request entity from the database
 type VerificationRequestDB struct {
-    ID         int64
-    UserID     int64
-    Note       string
-    Status     string
-    ReviewedBy *int64
-    ReviewedAt *time.Time
-    CreatedAt  time.Time
+    ID          int64
+    UserID      int64
+    Note        string
+    Status      string
+    AdminReason *string
+    ReviewedBy  *int64
+    ReviewedAt  *time.Time
+    CreatedAt   time.Time
+    UpdatedAt   time.Time
 }
 
 // GetUserByID retrieves a user by ID
@@ -173,9 +175,9 @@ func (r *Repository) CreateVerificationRequest(ctx context.Context, userID int64
 func (r *Repository) GetVerificationRequestByID(ctx context.Context, requestID int64) (*VerificationRequestDB, error) {
     var req VerificationRequestDB
     err := r.db.QueryRow(ctx, `
-        SELECT id, user_id, note, status, reviewed_by, reviewed_at, created_at
+        SELECT id, user_id, note, status, admin_reason, reviewed_by, reviewed_at, created_at, updated_at
         FROM verification_requests WHERE id = $1`, requestID,
-    ).Scan(&req.ID, &req.UserID, &req.Note, &req.Status, &req.ReviewedBy, &req.ReviewedAt, &req.CreatedAt)
+    ).Scan(&req.ID, &req.UserID, &req.Note, &req.Status, &req.AdminReason, &req.ReviewedBy, &req.ReviewedAt, &req.CreatedAt, &req.UpdatedAt)
     if err != nil {
         if err == sql.ErrNoRows {
             return nil, &errs.Error{Code: errs.NotFound, Message: "طلب التحقق غير موجود."}
@@ -185,16 +187,35 @@ func (r *Repository) GetVerificationRequestByID(ctx context.Context, requestID i
     return &req, nil
 }
 
+// GetLatestVerificationRequestByUserID retrieves the latest verification request for a user
+func (r *Repository) GetLatestVerificationRequestByUserID(ctx context.Context, userID int64) (*VerificationRequestDB, error) {
+    var req VerificationRequestDB
+    err := r.db.QueryRow(ctx, `
+        SELECT id, user_id, note, status, admin_reason, reviewed_by, reviewed_at, created_at, updated_at
+        FROM verification_requests 
+        WHERE user_id = $1 
+        ORDER BY created_at DESC 
+        LIMIT 1`, userID,
+    ).Scan(&req.ID, &req.UserID, &req.Note, &req.Status, &req.AdminReason, &req.ReviewedBy, &req.ReviewedAt, &req.CreatedAt, &req.UpdatedAt)
+    if err != nil {
+        if err == sql.ErrNoRows {
+            return nil, &errs.Error{Code: errs.NotFound, Message: "لا يوجد طلب توثيق."}
+        }
+        return nil, &errs.Error{Code: errs.Internal, Message: "خطأ في قراءة طلب التوثيق."}
+    }
+    return &req, nil
+}
+
 // ApproveVerificationRequest approves a verification request and updates user role
-func (r *Repository) ApproveVerificationRequest(ctx context.Context, requestID, adminUserID, targetUserID int64) error {
+func (r *Repository) ApproveVerificationRequest(ctx context.Context, requestID, adminUserID, targetUserID int64, adminReason string) error {
     tx, err := r.db.Begin(ctx)
     if err != nil { return &errs.Error{Code: errs.Internal, Message: "تعذر بدء المعاملة."} }
     defer tx.Rollback()
 
     if _, err := tx.Exec(ctx, `
         UPDATE verification_requests
-        SET status = 'approved', reviewed_by = $1, reviewed_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-        WHERE id = $2`, adminUserID, requestID); err != nil {
+        SET status = 'approved', reviewed_by = $1, reviewed_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), admin_reason = $3
+        WHERE id = $2`, adminUserID, requestID, adminReason); err != nil {
         return &errs.Error{Code: errs.Internal, Message: "تعذر تحديث طلب التحقق."}
     }
 
@@ -209,11 +230,11 @@ func (r *Repository) ApproveVerificationRequest(ctx context.Context, requestID, 
 }
 
 // RejectVerificationRequest rejects a verification request
-func (r *Repository) RejectVerificationRequest(ctx context.Context, requestID, adminUserID int64) error {
+func (r *Repository) RejectVerificationRequest(ctx context.Context, requestID, adminUserID int64, adminReason string) error {
     if _, err := r.db.Exec(ctx, `
         UPDATE verification_requests
-        SET status = 'rejected', reviewed_by = $1, reviewed_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-        WHERE id = $2`, adminUserID, requestID); err != nil {
+        SET status = 'rejected', reviewed_by = $1, reviewed_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), admin_reason = $2
+        WHERE id = $3`, adminUserID, adminReason, requestID); err != nil {
         return &errs.Error{Code: errs.Internal, Message: "تعذر رفض طلب التحقق."}
     }
     return nil

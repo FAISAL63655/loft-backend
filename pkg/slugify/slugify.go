@@ -152,6 +152,7 @@ func (s *Slugifier) GenerateUniqueWithConfig(ctx context.Context, input, tableNa
 		}
 
 		if !exists {
+			return candidateSlug, nil
 		}
 
 		counter++
@@ -160,7 +161,7 @@ func (s *Slugifier) GenerateUniqueWithConfig(ctx context.Context, input, tableNa
 		}
 	}
 
-	}
+}
 
 // convertArabicToLatin converts Arabic characters to their Latin equivalents
 // Rules tuned to satisfy tests:

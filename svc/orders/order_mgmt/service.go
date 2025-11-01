@@ -2,6 +2,7 @@ package order_mgmt
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 	"strings"
 	"time"
@@ -70,10 +71,22 @@ func ListMyOrders(ctx context.Context, q *Paginate) (*OrdersResponse, error) {
 }
 
 type OrderDetail struct {
-	ID     int64       `json:"id"`
-	Status string      `json:"status"`
-	Items  []OrderItem `json:"items"`
-	Totals OrderTotals `json:"totals"`
+	ID              int64            `json:"id"`
+	Status          string           `json:"status"`
+	Items           []OrderItem      `json:"items"`
+	Totals          OrderTotals      `json:"totals"`
+	UserID          int64            `json:"user_id,omitempty"`
+	UserName        string           `json:"user_name,omitempty"`
+	UserEmail       string           `json:"user_email,omitempty"`
+	UserPhone       string           `json:"user_phone,omitempty"`
+	ShippingAddress *ShippingAddress `json:"shipping_address,omitempty"`
+}
+
+type ShippingAddress struct {
+	CityName string `json:"city_name,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Line1    string `json:"line1,omitempty"`
+	Line2    string `json:"line2,omitempty"`
 }
 
 type OrderItem struct {
@@ -117,8 +130,105 @@ func GetOrder(ctx context.Context, id string) (*OrderDetail, error) {
 	}
 	var det OrderDetail
 	det.ID = oid
-	if err := db.Stdlib().QueryRowContext(ctx, `SELECT status::text, subtotal_gross, vat_amount, shipping_fee_gross, grand_total FROM orders WHERE id=$1`, oid).Scan(&det.Status, &det.Totals.SubtotalGross, &det.Totals.VATAmount, &det.Totals.ShippingGross, &det.Totals.GrandTotal); err != nil {
+	
+	// Fetch order with user and address information
+	var addressID sql.NullInt64
+	var userName, userEmail, userPhone sql.NullString
+	var cityName, addressLabel, addressLine1, addressLine2 sql.NullString
+	
+	err := db.Stdlib().QueryRowContext(ctx, `
+		SELECT 
+			o.status::text, 
+			o.subtotal_gross, 
+			o.vat_amount, 
+			o.shipping_fee_gross, 
+			o.grand_total,
+			o.user_id,
+			u.name,
+			u.email,
+			u.phone,
+			o.address_id,
+			c.name_ar,
+			a.label,
+			a.line1,
+			a.line2
+		FROM orders o
+		JOIN users u ON u.id = o.user_id
+		LEFT JOIN addresses a ON a.id = o.address_id
+		LEFT JOIN cities c ON c.id = a.city_id
+		WHERE o.id = $1
+	`, oid).Scan(
+		&det.Status, 
+		&det.Totals.SubtotalGross, 
+		&det.Totals.VATAmount, 
+		&det.Totals.ShippingGross, 
+		&det.Totals.GrandTotal,
+		&det.UserID,
+		&userName,
+		&userEmail,
+		&userPhone,
+		&addressID,
+		&cityName,
+		&addressLabel,
+		&addressLine1,
+		&addressLine2,
+	)
+	if err != nil {
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل قراءة الطلب"}
+	}
+	
+	// Set user info
+	if userName.Valid {
+		det.UserName = userName.String
+	}
+	if userEmail.Valid {
+		det.UserEmail = userEmail.String
+	}
+	if userPhone.Valid {
+		det.UserPhone = userPhone.String
+	}
+	
+	// Set address info if exists
+	if addressID.Valid && addressID.Int64 > 0 {
+		det.ShippingAddress = &ShippingAddress{}
+		if cityName.Valid {
+			det.ShippingAddress.CityName = cityName.String
+		}
+		if addressLabel.Valid {
+			det.ShippingAddress.Label = addressLabel.String
+		}
+		if addressLine1.Valid {
+			det.ShippingAddress.Line1 = addressLine1.String
+		}
+		if addressLine2.Valid {
+			det.ShippingAddress.Line2 = addressLine2.String
+		}
+	} else {
+		// Fallback: Get user's default address if order has no address_id
+		var defCityName, defLabel, defLine1, defLine2 sql.NullString
+		err := db.Stdlib().QueryRowContext(ctx, `
+			SELECT c.name_ar, a.label, a.line1, a.line2
+			FROM addresses a
+			JOIN cities c ON c.id = a.city_id
+			WHERE a.user_id = $1 AND a.is_default = true AND a.archived_at IS NULL
+			LIMIT 1
+		`, det.UserID).Scan(&defCityName, &defLabel, &defLine1, &defLine2)
+		
+		if err == nil {
+			det.ShippingAddress = &ShippingAddress{}
+			if defCityName.Valid {
+				det.ShippingAddress.CityName = defCityName.String
+			}
+			if defLabel.Valid {
+				det.ShippingAddress.Label = defLabel.String
+			}
+			if defLine1.Valid {
+				det.ShippingAddress.Line1 = defLine1.String
+			}
+			if defLine2.Valid {
+				det.ShippingAddress.Line2 = defLine2.String
+			}
+		}
 	}
 	rows, err := db.Stdlib().QueryContext(ctx, `SELECT product_id, qty, unit_price_gross, line_total_gross FROM order_items WHERE order_id=$1`, oid)
 	if err != nil {

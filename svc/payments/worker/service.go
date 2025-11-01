@@ -144,74 +144,65 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	}
 	halalas := int(amountGross*100.0 + 0.5)
 
-	// Create real Moyasar invoice/session
-	// Determine frontend base URL (from settings CORS origins) with safe fallback
+	// ========= اختيار الدومين للـ URLs (يفضّل www.dughairiloft.com) =========
 	frontendBase := "http://localhost:3000"
+
 	if s := config.GetSettings(); s != nil && len(s.CORSAllowedOrigins) > 0 {
-		preferred := ""
-		// 1) Prefer the production Vercel domain
+		// 1) فضّل www.dughairiloft.com إن وُجد
 		for _, o := range s.CORSAllowedOrigins {
 			o = strings.TrimSpace(o)
-			if o != "" && o != "*" && strings.Contains(o, "loft-frontend-v3.vercel.app") {
-				preferred = strings.TrimRight(o, "/")
+			if o != "" && o != "*" && strings.Contains(o, "www.dughairiloft.com") {
+				frontendBase = strings.TrimRight(o, "/")
 				break
 			}
 		}
-		// 2) Otherwise prefer any domain containing -v3.
-		if preferred == "" {
+		// 2) وإلا أي نطاق يحتوي dughairiloft.com
+		if !strings.Contains(frontendBase, "dughairiloft.com") {
 			for _, o := range s.CORSAllowedOrigins {
 				o = strings.TrimSpace(o)
-				if o != "" && o != "*" && strings.Contains(o, "-v3.") {
-					preferred = strings.TrimRight(o, "/")
+				if o != "" && o != "*" && strings.Contains(o, "dughairiloft.com") {
+					frontendBase = strings.TrimRight(o, "/")
 					break
 				}
 			}
 		}
-		// 3) Otherwise pick the first non-admin domain
-		if preferred == "" {
+		// 3) إن ما لقينا، خذ أول non-admin صالح (للتجارب)
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.") {
 			for _, o := range s.CORSAllowedOrigins {
 				o = strings.TrimSpace(o)
 				if o != "" && o != "*" && !strings.Contains(o, "admin.") {
-					preferred = strings.TrimRight(o, "/")
-					break
-				}
-			}
-		}
-		// 4) Apply preferred; fallback to first valid origin
-		if preferred != "" {
-			frontendBase = preferred
-		} else {
-			for _, o := range s.CORSAllowedOrigins {
-				o = strings.TrimSpace(o)
-				if o != "" && o != "*" {
 					frontendBase = strings.TrimRight(o, "/")
 					break
 				}
 			}
 		}
 	}
-	// 404 4444/2434342 44 44 24 2424 24 localhost
+
+	// في بيئات غير التطوير/المحلي: امنع localhost و vercel.app واستخدم دومين الإنتاج + https
 	if encore.Meta().Environment.Type != encore.EnvLocal && encore.Meta().Environment.Type != encore.EnvDevelopment {
-		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.0.0.1") {
-			frontendBase = "https://loft-frontend-v3.vercel.app"
+		if strings.HasPrefix(frontendBase, "http://localhost") || strings.HasPrefix(frontendBase, "http://127.") || strings.Contains(frontendBase, "vercel.app") {
+			frontendBase = "https://www.dughairiloft.com"
+		}
+		if strings.HasPrefix(frontendBase, "http://www.dughairiloft.com") {
+			frontendBase = "https://www.dughairiloft.com"
 		}
 	}
 
-	// returnURL: where user is redirected after payment (browser redirect from Moyasar)
-	// Include payment_id placeholder - Moyasar will append its own params (id, status, etc)
+	// returnURL & callbackURL بعد الدفع
 	returnURL := fmt.Sprintf("%s/checkout/callback?invoice_id=%d", frontendBase, req.InvoiceID)
-
-	// callbackURL: same as returnURL - Moyasar uses this for browser redirect after payment completion
 	callbackURL := returnURL
 
-	// webhookURL: server-to-server notification endpoint (optional if configured in dashboard)
+	// webhookURL: محلي فقط (الإنتاج مضبوط من لوحة مزوّد الدفع)
 	webhookURL := ""
 	if encore.Meta().Environment.Type == encore.EnvLocal {
 		webhookURL = "http://127.0.0.1:4000/payments/webhook/moyasar"
 	}
-	// Note: In production, webhook should be configured in Moyasar dashboard instead of per-payment
 
-	gatewayRef, sessionURL, err := moyasar.CreateInvoice(halalas, currency, fmt.Sprintf("invoice:%d", req.InvoiceID), callbackURL, returnURL, webhookURL, map[string]string{"invoice_id": fmt.Sprint(req.InvoiceID)})
+	gatewayRef, sessionURL, err := moyasar.CreateInvoice(
+		halalas, currency, fmt.Sprintf("invoice:%d", req.InvoiceID),
+		callbackURL, returnURL, webhookURL,
+		map[string]string{"invoice_id": fmt.Sprint(req.InvoiceID)},
+	)
 	if err != nil {
 		logger.LogError(ctx, err, "moyasar create invoice failed", logger.Fields{
 			"invoice_id":       req.InvoiceID,
@@ -233,8 +224,6 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	if err := db.Stdlib().QueryRowContext(ctx, `INSERT INTO payments (invoice_id, gateway, gateway_ref, status, currency, amount_authorized, raw_response) VALUES ($1,'moyasar',$2,'initiated',$3,$4,'{}') RETURNING id`, req.InvoiceID, gatewayRef, currency, float64(halalas)/100.0).Scan(&paymentID); err != nil {
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل إنشاء سجل الدفع"}
 	}
-
-	// No reservations in cart_items model: nothing to link or change product status pre-payment
 
 	// Update invoice to payment_in_progress and store session metadata (incl. start time)
 	nowUTC := time.Now().UTC().Format(time.RFC3339)
@@ -1111,9 +1100,9 @@ func processWebhook(ctx context.Context, gatewayRef string, invoiceIDHint int64,
                     )
                 `, notifOrderID).Scan(&hasPigeons)
 
-				// Get frontend URL
-				frontendURL := "https://loft-dughairi.com"
-				if encore.Meta().Environment.Type == encore.EnvDevelopment {
+				// Frontend URL للايميل
+				frontendURL := "https://www.dughairiloft.com"
+				if encore.Meta().Environment.Type == encore.EnvDevelopment || encore.Meta().Environment.Type == encore.EnvLocal {
 					frontendURL = "http://localhost:3000"
 				}
 
