@@ -77,7 +77,7 @@ type StartPhoneResponse struct {
 // VerifyPhoneRequest verifies the OTP and returns a short-lived token to be used during registration
 type VerifyPhoneRequest struct {
 	Phone string `json:"phone" validate:"required"`
-	Code  string `json:"code" validate:"required,len=4"`
+	Code  string `json:"code" validate:"required,min=4,max=10"`
 }
 
 type VerifyPhoneResponse struct {
