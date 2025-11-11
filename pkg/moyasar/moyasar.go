@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"encore.app/pkg/config"
-	"encore.dev"
 )
 
 var secrets struct {
@@ -23,20 +22,16 @@ var secrets struct {
 }
 
 func inTestMode() bool {
-	cfg := config.GetGlobalManager()
-	if cfg != nil {
-		settings := cfg.GetSettings()
-		if settings != nil && settings.PaymentsTestMode {
-			return true
-		}
-	}
-	// Fallback to local env
-	return encore.Meta().Environment.Type == encore.EnvLocal
+    // Test mode strictly controlled via system settings
+    if s := config.GetSettings(); s != nil && s.PaymentsTestMode {
+        return true
+    }
+    return false
 }
 
 func VerifySignature(rawBody []byte, signatureHeader string) bool {
-    // In local development, accept webhook without verification to unblock
-    if encore.Meta().Environment.Type == encore.EnvLocal {
+    // Allow skipping verification only when PaymentsTestMode is enabled.
+    if s := config.GetSettings(); s != nil && s.PaymentsTestMode {
         return true
     }
     if secrets.MoyasarWebhookSecret == "" || strings.TrimSpace(signatureHeader) == "" {
@@ -130,8 +125,8 @@ func VerifySignature(rawBody []byte, signatureHeader string) bool {
 // Some providers (including Moyasar) include `secret_token` in the webhook object instead of
 // an HMAC signature header. This helper compares the provided token with the configured secret.
 func VerifySecretToken(token string) bool {
-    // In local development, accept webhook to unblock workflows
-    if encore.Meta().Environment.Type == encore.EnvLocal {
+    // Allow skipping verification only when PaymentsTestMode is enabled.
+    if s := config.GetSettings(); s != nil && s.PaymentsTestMode {
         return true
     }
     t := strings.TrimSpace(token)

@@ -221,13 +221,13 @@ var templates = map[string]*EmailTemplate{
 
     <div class="footer">
       <div class="footer-brand">لوفت الدغيري</div>
-      <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+      <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
       <div class="social-links">
         <a href="https://dughairiloft.com/" target="_blank">الموقع الإلكتروني</a> •
-        <a href="https://dughairiloft.com/contact" target="_blank">تواصل معنا</a> •
+        <a href="mailto:contact@dughairiloft.com" target="_blank">تواصل معنا</a> •
         <a href="https://dughairiloft.com/terms" target="_blank">الشروط والأحكام</a>
       </div>
-      <p class="footer-text" style="margin-top:8px;">&copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة</p>
+      <p class="footer-text" style="margin-top:8px;">&copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>القصيم - بريدة - المملكة العربية السعودية</p>
     </div>
   </div>
 </body>
@@ -431,9 +431,10 @@ Valid for {{.expires_in}}. If you didn't request this code, please ignore this e
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -741,7 +742,7 @@ Your account has been verified. You can now participate in auctions per platform
                 <p>• يُستلم من: لوفت الدغيري - بريدة، القصيم</p>
                 <p>• سيتم التواصل معك خلال 24 ساعة لتحديد موعد الاستلام</p>
                 <p>• أوقات الاستلام: الأحد - الخميس (9ص - 6م)</p>
-                <p>• للاستفسار: 920000000</p>
+                <p>• للاستفسار: <a href="mailto:contact@dughairiloft.com">contact@dughairiloft.com</a></p>
             </div>
             {{else}}
             <div class="info-box">
@@ -749,7 +750,7 @@ Your account has been verified. You can now participate in auctions per platform
                 <p>• سيتم شحن طلبك خلال 1-2 يوم عمل</p>
                 <p>• مدة التوصيل: 2-3 أيام عمل</p>
                 <p>• سنرسل لك رسالة نصية برقم التتبع</p>
-                <p>• للاستفسار: 920000000</p>
+                <p>• للاستفسار: <a href="mailto:contact@dughairiloft.com">contact@dughairiloft.com</a></p>
             </div>
             {{end}}
 
@@ -763,14 +764,15 @@ Your account has been verified. You can now participate in auctions per platform
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <div class="social-links">
-                <a href="#">الموقع الإلكتروني</a> •
-                <a href="#">تواصل معنا</a> •
-                <a href="#">الشروط والأحكام</a>
+                <a href="https://dughairiloft.com/">الموقع الإلكتروني</a> •
+                <a href="mailto:contact@dughairiloft.com">تواصل معنا</a> •
+                <a href="https://dughairiloft.com/terms">الشروط والأحكام</a>
             </div>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -893,7 +895,7 @@ Thank you for your trust.`,
 		ID:          "welcome",
 		Description: "رسالة الترحيب بعد التسجيل",
 		Subject: map[string]string{
-			"ar": "مرحباً بك في لوفت الدغيري - منصتك المتخصصة",
+			"ar": "مرحباً بك في لوفت الدغيري - منصة الحمام الزاجل",
 			"en": "Welcome to Al-Dughairi Loft",
 		},
 		HTMLBody: map[string]string{
@@ -975,9 +977,10 @@ Thank you for your trust.`,
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -1254,9 +1257,10 @@ View Auction: {{.AuctionURL}}`,
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -1413,9 +1417,10 @@ Payment: {{.PaymentURL}}`,
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -1595,9 +1600,10 @@ Note: Link is valid for one hour and single-use only.`,
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>
@@ -1815,9 +1821,10 @@ Bid again: {{.AuctionURL}}`,
         </div>
         <div class="footer">
             <div class="footer-brand">لوفت الدغيري</div>
-            <p class="footer-text">منصتك المتخصصة في عالم الحمام والطيور</p>
+            <p class="footer-text">منصة متخصصة في بيع الحمام الزاجل والمزادات المباشرة</p>
             <p class="footer-text" style="margin-top: 12px;">
-                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة
+                &copy; 2025 لوفت الدغيري - جميع الحقوق محفوظة<br>
+                القصيم - بريدة - المملكة العربية السعودية
             </p>
         </div>
     </div>

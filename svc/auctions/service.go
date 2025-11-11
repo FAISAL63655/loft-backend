@@ -403,9 +403,26 @@ func TickAuctions(ctx context.Context) error {
 				if txerr != nil {
 					continue
 				}
-				_ = s.repo.UpdateAuctionStatus(ctx, tx, a.ID, AuctionStatusEnded)
-				_ = s.updateProductStatusTx(ctx, tx, det.ProductID, "auction_hold")
-				_ = tx.Commit()
+				res, err := tx.Exec(ctx, `
+					UPDATE auctions
+					SET status='ended', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+					WHERE id=$1 AND status='live' AND end_at <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')`, a.ID)
+				if err != nil {
+					_ = tx.Rollback()
+					continue
+				}
+				rows := res.RowsAffected()
+				if rows == 0 {
+					_ = tx.Rollback()
+					continue
+				}
+				if err := s.updateProductStatusTx(ctx, tx, det.ProductID, "auction_hold"); err != nil {
+					_ = tx.Rollback()
+					continue
+				}
+				if err := tx.Commit(); err != nil {
+					continue
+				}
 				fmt.Printf("[AUCTION_TICK] Closed auction %d with winner\n", a.ID)
 				// Lookup winner user id (last highest bid)
 				var winnerUserID int64
@@ -471,9 +488,26 @@ func TickAuctions(ctx context.Context) error {
 				if txerr != nil {
 					continue
 				}
-				_ = s.repo.UpdateAuctionStatus(ctx, tx, a.ID, AuctionStatusEnded)
-				_ = s.updateProductStatusTx(ctx, tx, det.ProductID, "available")
-				_ = tx.Commit()
+				res, err := tx.Exec(ctx, `
+					UPDATE auctions
+					SET status='ended', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+					WHERE id=$1 AND status='live' AND end_at <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')`, a.ID)
+				if err != nil {
+					_ = tx.Rollback()
+					continue
+				}
+				rows := res.RowsAffected()
+				if rows == 0 {
+					_ = tx.Rollback()
+					continue
+				}
+				if err := s.updateProductStatusTx(ctx, tx, det.ProductID, "available"); err != nil {
+					_ = tx.Rollback()
+					continue
+				}
+				if err := tx.Commit(); err != nil {
+					continue
+				}
 				fmt.Printf("[AUCTION_TICK] Closed auction %d without winner (%s)\n", a.ID, reason)
 				// Audit end without winner
 				s.sendAuditNotification(ctx, "AUC.ENDED_NO_WINNER", a.ID, map[string]interface{}{

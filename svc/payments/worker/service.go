@@ -38,6 +38,61 @@ func init() {
 	}
 }
 
+type AdminPublishPaymentEventRequest struct {
+    GatewayRef string `json:"gateway_ref"`
+    Status     string `json:"status"`
+    Amount     int64  `json:"amount"`
+    Captured   int64  `json:"captured"`
+    Currency   string `json:"currency"`
+    InvoiceID  int64  `json:"invoice_id"`
+}
+
+type AdminPublishPaymentEventResponse struct {
+    Published bool   `json:"published"`
+    Message   string `json:"message"`
+}
+
+//encore:api auth method=POST path=/admin/pubsub/payment-webhook/test
+func AdminPublishPaymentWebhookEvent(ctx context.Context, req *AdminPublishPaymentEventRequest) (*AdminPublishPaymentEventResponse, error) {
+    uidStr, ok := auth.UserID()
+    if !ok {
+        return nil, &errs.Error{Code: errs.Unauthenticated, Message: "مطلوب تسجيل الدخول"}
+    }
+    uid, _ := strconv.ParseInt(string(uidStr), 10, 64)
+    var role string
+    _ = db.Stdlib().QueryRowContext(ctx, `SELECT role::text FROM users WHERE id=$1`, uid).Scan(&role)
+    if strings.ToLower(role) != "admin" {
+        return nil, &errs.Error{Code: errs.Forbidden, Message: "يتطلب صلاحيات مدير"}
+    }
+
+    if req == nil {
+        req = &AdminPublishPaymentEventRequest{}
+    }
+    if strings.TrimSpace(req.Status) == "" {
+        req.Status = "captured"
+    }
+    if strings.TrimSpace(req.Currency) == "" {
+        req.Currency = "SAR"
+    }
+    if req.Amount == 0 {
+        req.Amount = 100
+    }
+    now := time.Now().UTC().Format(time.RFC3339)
+    evt := &PaymentEvent{
+        GatewayRef: strings.TrimSpace(req.GatewayRef),
+        Status:     strings.ToLower(req.Status),
+        Amount:     req.Amount,
+        Captured:   req.Captured,
+        Currency:   strings.ToUpper(req.Currency),
+        ReceivedAt: now,
+        InvoiceID:  req.InvoiceID,
+    }
+    if _, err := PaymentWebhookEvents.Publish(ctx, evt); err != nil {
+        return nil, &errs.Error{Code: errs.Internal, Message: fmt.Sprintf("فشل نشر الحدث: %v", err)}
+    }
+    return &AdminPublishPaymentEventResponse{Published: true, Message: "تم النشر"}, nil
+}
+
 //encore:service
 type Service struct{}
 
@@ -109,7 +164,40 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	}
 	// Enforce invoice state for starting a payment session
 	if invStatus != "unpaid" && invStatus != "failed" {
-		return nil, &errs.Error{Code: errs.Conflict, Message: "لا يمكن بدء الدفع لهذه الفاتورة"}
+		// If currently in progress, check if the session expired based on settings TTL, then allow retry
+		if invStatus == "payment_in_progress" {
+			ttlMin := 30
+			if s := config.GetSettings(); s != nil && s.PaymentsSessionTTL > 0 {
+				ttlMin = s.PaymentsSessionTTL
+			}
+			var startedAt sql.NullString
+			_ = db.Stdlib().QueryRowContext(ctx, `SELECT totals->>'pay_started_at' FROM invoices WHERE id=$1`, req.InvoiceID).Scan(&startedAt)
+			if startedAt.Valid && strings.TrimSpace(startedAt.String) != "" {
+				if t, err := time.Parse(time.RFC3339, startedAt.String); err == nil {
+					if time.Since(t) > time.Duration(ttlMin)*time.Minute {
+						// Expired: reset invoice and fail pending payments
+						_, _ = db.Stdlib().ExecContext(ctx, `
+							UPDATE invoices
+							SET status='unpaid',
+								totals = COALESCE(totals,'{}'::jsonb)
+										- 'pay_idem_key' - 'pay_method' - 'pay_session' - 'payment_id' - 'pay_started_at' - 'pay_currency' - 'pay_amount'
+							WHERE id=$1 AND status='payment_in_progress'
+						`, req.InvoiceID)
+						_, _ = db.Stdlib().ExecContext(ctx, `
+							UPDATE payments
+							SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+							WHERE invoice_id=$1 AND status IN ('initiated','pending')
+						`, req.InvoiceID)
+
+						invStatus = "unpaid"
+					}
+				}
+			}
+		}
+		// Re-check after cleanup
+		if invStatus != "unpaid" && invStatus != "failed" {
+			return nil, &errs.Error{Code: errs.Conflict, Message: "لا يمكن بدء الدفع لهذه الفاتورة"}
+		}
 	}
 	// Config guards
 	cfg := config.GetSettings()
@@ -130,7 +218,18 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 		}
 	}
 
-	// Guard: one live session per invoice
+	// Guard: one live session per invoice (cleanup stale before checking)
+	ttlMin := 30
+	if c2 := config.GetSettings(); c2 != nil && c2.PaymentsSessionTTL > 0 {
+		ttlMin = c2.PaymentsSessionTTL
+	}
+	threshold := time.Now().UTC().Add(-time.Duration(ttlMin) * time.Minute)
+	_, _ = db.Stdlib().ExecContext(ctx, `
+		UPDATE payments
+		SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+		WHERE invoice_id=$1 AND status IN ('initiated','pending') AND created_at < $2
+	`, req.InvoiceID, threshold)
+
 	var liveCount int
 	if err := db.Stdlib().QueryRowContext(ctx, `SELECT COUNT(*) FROM payments WHERE invoice_id=$1 AND status IN ('initiated','pending')`, req.InvoiceID).Scan(&liveCount); err == nil && liveCount > 0 {
 		return nil, &errs.Error{Code: errs.Conflict, Message: "يوجد جلسة دفع قائمة لهذه الفاتورة"}
@@ -243,25 +342,6 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 		WHERE id=$8
 	`, key, method, sessionURL, paymentID, nowUTC, currency, float64(halalas)/100.0, req.InvoiceID); err != nil {
 		return nil, &errs.Error{Code: errs.Internal, Message: "فشل تحديث الفاتورة: " + err.Error()}
-	}
-
-	// In local/test mode simulate a successful payment via internal pubsub to unblock the flow
-	if s := config.GetSettings(); (s != nil && s.PaymentsTestMode) || encore.Meta().Environment.Type == encore.EnvLocal {
-		go func(gwRef string, invID int64, amt int, curr string) {
-			ctx2 := context.Background()
-			evt := &PaymentEvent{
-				GatewayRef: gwRef,
-				Status:     "paid",
-				Amount:     int64(amt),
-				Captured:   int64(amt),
-				Currency:   curr,
-				ReceivedAt: time.Now().UTC().Format(time.RFC3339),
-				InvoiceID:  invID,
-			}
-			if _, err := PaymentWebhookEvents.Publish(ctx2, evt); err != nil {
-				logger.LogError(ctx2, err, "publish test payment event failed", logger.Fields{"gateway_ref": gwRef})
-			}
-		}(gatewayRef, req.InvoiceID, halalas, currency)
 	}
 
 	return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: paymentID, SessionURL: sessionURL}, nil

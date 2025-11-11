@@ -4,12 +4,16 @@ import (
 	"context"
 
 	"net/http"
+	"strconv"
+	"strings"
 
 	"encore.app/coredb"
 	"encore.app/pkg/audit"
+	"encore.app/pkg/errs"
 	"encore.app/svc/auctions"
 	"encore.app/svc/payments/worker"
 	"encore.dev/cron"
+	"encore.dev/beta/auth"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -102,15 +106,36 @@ func Metrics(w http.ResponseWriter, r *http.Request) {
 
 // ===== Admin endpoints (temporary) to manually trigger cron jobs locally =====
 
-type RunAllCronResponse struct {
-    AuctionTick         string                    `json:"auction_tick"`
-    PaymentCleaner      string                    `json:"payment_cleaner"`
-    DailyAdminDigest    string                    `json:"daily_admin_digest"`
-    PaymentCleanerStats *worker.CleanupResponse   `json:"payment_cleaner_stats,omitempty"`
+// ensureAdmin checks that the caller is an authenticated admin user
+func ensureAdmin(ctx context.Context) error {
+	uidStr, ok := auth.UserID()
+	if !ok {
+		return errs.New(errs.Unauthenticated, "مطلوب تسجيل الدخول")
+	}
+	id64, err := strconv.ParseInt(string(uidStr), 10, 64)
+	if err != nil {
+		return errs.New(errs.Forbidden, "فشل التحقق من الصلاحيات")
+	}
+	var role string
+	if err := coredb.DB.QueryRow(ctx, `SELECT role FROM users WHERE id = $1 AND state='active'`, id64).Scan(&role); err != nil {
+		return errs.New(errs.Forbidden, "فشل التحقق من الصلاحيات")
+	}
+	if strings.ToLower(role) != "admin" {
+		return errs.New(errs.Forbidden, "يتطلب صلاحيات مدير")
+	}
+	return nil
 }
 
-//encore:api public method=POST path=/admin/cron/run-all
+type RunAllCronResponse struct {
+	AuctionTick         string                    `json:"auction_tick"`
+	PaymentCleaner      string                    `json:"payment_cleaner"`
+	DailyAdminDigest    string                    `json:"daily_admin_digest"`
+	PaymentCleanerStats *worker.CleanupResponse   `json:"payment_cleaner_stats,omitempty"`
+}
+
+//encore:api auth method=POST path=/admin/cron/run-all
 func RunAllCronJobs(ctx context.Context) (*RunAllCronResponse, error) {
+    if err := ensureAdmin(ctx); err != nil { return nil, err }
     out := &RunAllCronResponse{}
 
     if err := RunAuctionTick(ctx); err != nil {
@@ -135,11 +160,45 @@ func RunAllCronJobs(ctx context.Context) (*RunAllCronResponse, error) {
     return out, nil
 }
 
-//encore:api public method=POST path=/admin/cron/auction-tick
-func RunAuctionTickAdmin(ctx context.Context) error { return RunAuctionTick(ctx) }
+//encore:api auth method=POST path=/admin/cron/auction-tick
+func RunAuctionTickAdmin(ctx context.Context) error {
+    if err := ensureAdmin(ctx); err != nil { return err }
+    return RunAuctionTick(ctx)
+}
 
-//encore:api public method=POST path=/admin/cron/payment-cleaner
-func RunPaymentCleanerAdmin(ctx context.Context) (*worker.CleanupResponse, error) { return RunPaymentInProgressCleaner(ctx) }
+//encore:api auth method=POST path=/admin/cron/payment-cleaner
+func RunPaymentCleanerAdmin(ctx context.Context) (*worker.CleanupResponse, error) {
+    if err := ensureAdmin(ctx); err != nil { return nil, err }
+    return RunPaymentInProgressCleaner(ctx)
+}
 
-//encore:api public method=POST path=/admin/cron/daily-admin-digest
-func RunDailyAdminDigestAdmin(ctx context.Context) error { return RunDailyAdminDigest(ctx) }
+//encore:api auth method=POST path=/admin/cron/daily-admin-digest
+func RunDailyAdminDigestAdmin(ctx context.Context) error {
+    if err := ensureAdmin(ctx); err != nil { return err }
+    return RunDailyAdminDigest(ctx)
+}
+
+// ===== List Cron Jobs for Admin UI =====
+
+type CronJobInfo struct {
+    ID       string `json:"id"`
+    Title    string `json:"title"`
+    Schedule string `json:"schedule"`
+}
+
+type ListCronJobsResponse struct {
+    Jobs []CronJobInfo `json:"jobs"`
+}
+
+//encore:api auth method=GET path=/admin/cron/list
+func ListCronJobs(ctx context.Context) (*ListCronJobsResponse, error) {
+    if err := ensureAdmin(ctx); err != nil { return nil, err }
+    // Keep in sync with cron.NewJob registrations above
+    return &ListCronJobsResponse{Jobs: []CronJobInfo{
+        {ID: "auction-tick", Title: "Tick auctions (start/close)", Schedule: "every:1m"},
+        {ID: "payment-in-progress-cleaner", Title: "Cleanup stale payment_in_progress sessions", Schedule: "every:10m"},
+        {ID: "daily-admin-digest", Title: "Daily admin digest (optional)", Schedule: "every:24h"},
+        {ID: "notifications-retention-cleanup", Title: "Clean up old notifications based on retention policy", Schedule: "cron:0 3 * * *"},
+        {ID: "notifications-email-queue", Title: "Process email notifications queue", Schedule: "every:1m"},
+    }}, nil
+}
