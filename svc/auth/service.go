@@ -798,6 +798,8 @@ func (s *Service) sendPasswordResetEmail(ctx context.Context, userID int64, emai
 	resetURL := fmt.Sprintf("%s/auth/loft/reset-password?token=%s", frontendURL, resetToken)
 
 	payload := map[string]interface{}{
+		"Name":        name,
+		"ResetURL":    resetURL,
 		"email":       email,
 		"name":        name,
 		"user_name":   name,
