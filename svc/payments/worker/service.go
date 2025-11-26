@@ -162,6 +162,20 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	if ownerID != uid {
 		return nil, &errs.Error{Code: errs.Forbidden, Message: "غير مصرح"}
 	}
+
+	// Idempotency: check existing session metadata
+	var existingKey, existingMethod, existingSession sql.NullString
+	_ = db.Stdlib().QueryRowContext(ctx, `SELECT totals->>'pay_idem_key', totals->>'pay_method', totals->>'pay_session' FROM invoices WHERE id=$1`, req.InvoiceID).Scan(&existingKey, &existingMethod, &existingSession)
+	if existingKey.Valid && existingKey.String != "" {
+		if existingKey.String == key {
+			if existingMethod.Valid && existingMethod.String != "" && strings.ToLower(existingMethod.String) != method {
+				return nil, &errs.Error{Code: "PAY_IDEM_MISMATCH", Message: "طريقة دفع مختلفة لنفس المفتاح", Details: map[string]any{"method": existingMethod.String, "session": existingSession.String}}
+			}
+			// Return existing session (idempotent replay)
+			return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
+		}
+	}
+
 	// Enforce invoice state for starting a payment session
 	if invStatus != "unpaid" && invStatus != "failed" {
 		// If currently in progress, check if the session expired based on settings TTL, then allow retry
@@ -203,19 +217,6 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 	cfg := config.GetSettings()
 	if cfg == nil || !cfg.PaymentsEnabled || strings.ToLower(cfg.PaymentsProvider) != "moyasar" {
 		return nil, &errs.Error{Code: errs.Conflict, Message: "الدفع غير مفعّل"}
-	}
-
-	// Idempotency: check existing session metadata
-	var existingKey, existingMethod, existingSession sql.NullString
-	_ = db.Stdlib().QueryRowContext(ctx, `SELECT totals->>'pay_idem_key', totals->>'pay_method', totals->>'pay_session' FROM invoices WHERE id=$1`, req.InvoiceID).Scan(&existingKey, &existingMethod, &existingSession)
-	if existingKey.Valid && existingKey.String != "" {
-		if existingKey.String == key {
-			if existingMethod.Valid && existingMethod.String != "" && strings.ToLower(existingMethod.String) != method {
-				return nil, &errs.Error{Code: "PAY_IDEM_MISMATCH", Message: "طريقة دفع مختلفة لنفس المفتاح", Details: map[string]any{"method": existingMethod.String, "session": existingSession.String}}
-			}
-			// Return existing session (idempotent replay)
-			return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
-		}
 	}
 
 	// Guard: one live session per invoice (cleanup stale before checking)

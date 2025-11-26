@@ -1436,15 +1436,72 @@ func (s *Service) UpdateOrderStatus(ctx context.Context, id int64, req *UpdateOr
 		return nil, errs.New(errs.ValidationFailed, "حالة غير مسموحة")
 	}
 
-	// Update order status
-	query := "UPDATE orders SET status = $1, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $2 RETURNING id, status::text"
-	var result UpdateOrderStatusResponse
-	err := db.Stdlib().QueryRowContext(ctx, query, status, id).Scan(&result.ID, &result.Status)
+	// Start transaction
+	tx, err := db.Stdlib().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, errs.New(errs.Internal, "فشل بدء المعاملة")
+	}
+	defer tx.Rollback()
+
+	// Get current status to decide on restocking
+	var oldStatus string
+	err = tx.QueryRowContext(ctx, "SELECT status FROM orders WHERE id = $1 FOR UPDATE", id).Scan(&oldStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errs.New(errs.NotFound, "الطلب غير موجود")
 		}
+		return nil, errs.New(errs.Internal, "فشل قراءة حالة الطلب الحالية")
+	}
+
+	// Update order status
+	query := "UPDATE orders SET status = $1, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE id = $2 RETURNING id, status::text"
+	var result UpdateOrderStatusResponse
+	err = tx.QueryRowContext(ctx, query, status, id).Scan(&result.ID, &result.Status)
+	if err != nil {
 		return nil, errs.New(errs.Internal, "فشل تحديث حالة الطلب")
+	}
+
+	// Automatic Restocking Logic
+	// If cancelling an order that was previously paid/processed (meaning stock was deducted), return the stock.
+	if status == "cancelled" {
+		wasPaid := false
+		paidStatuses := []string{"paid", "processing", "shipped", "delivered", "awaiting_admin_refund", "refund_required"}
+		for _, s := range paidStatuses {
+			if oldStatus == s {
+				wasPaid = true
+				break
+			}
+		}
+
+		if wasPaid {
+			// 1. Restore Pigeons: Set status back to 'available'
+			// Only for pigeons linked to this order
+			_, err = tx.ExecContext(ctx, `
+				UPDATE products p
+				SET status = 'available', updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+				FROM order_items oi
+				WHERE oi.order_id = $1 AND oi.product_id = p.id AND p.type = 'pigeon'
+			`, id)
+			if err != nil {
+				return nil, errs.New(errs.Internal, "فشل استرجاع الحمام للمخزون")
+			}
+
+			// 2. Restore Supplies: Increment stock_qty
+			_, err = tx.ExecContext(ctx, `
+				UPDATE supplies s
+				SET stock_qty = s.stock_qty + oi.qty
+				FROM order_items oi
+				JOIN products p ON p.id = oi.product_id
+				WHERE oi.order_id = $1 AND s.product_id = oi.product_id AND p.type = 'supply'
+			`, id)
+			if err != nil {
+				return nil, errs.New(errs.Internal, "فشل استرجاع المستلزمات للمخزون")
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, errs.New(errs.Internal, "فشل حفظ التغييرات")
 	}
 
 	// TODO: Log the status change with notes if provided
