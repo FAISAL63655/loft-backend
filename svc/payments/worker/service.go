@@ -210,12 +210,26 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 		}
 		// Re-check after cleanup
 		if invStatus != "unpaid" && invStatus != "failed" {
+			// Handle already paid cases explicitly
+			if invStatus == "paid" || invStatus == "authorized" || invStatus == "captured" {
+				return nil, &errs.Error{Code: "INVOICE_ALREADY_PAID", Message: "هذه الفاتورة مدفوعة بالفعل"}
+			}
+
 			// If we have an active session on the invoice, return it even if the key didn't match strictly.
 			// This handles cases where the initial session was created without a key or with a different flow.
-			if invStatus == "payment_in_progress" && existingSession.Valid && existingSession.String != "" {
-				return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
+			if invStatus == "payment_in_progress" {
+				if existingSession.Valid && existingSession.String != "" {
+					return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
+				}
+				// Zombie state: In progress but no session found. Self-heal by resetting to unpaid.
+				logger.Info(ctx, "found zombie payment_in_progress invoice with no session, resetting", logger.Fields{"invoice_id": req.InvoiceID})
+				_, _ = db.Stdlib().ExecContext(ctx, `UPDATE invoices SET status='unpaid' WHERE id=$1`, req.InvoiceID)
+				invStatus = "unpaid" // Allow proceeding to create new session
 			}
-			return nil, &errs.Error{Code: errs.Conflict, Message: "لا يمكن بدء الدفع لهذه الفاتورة"}
+
+			if invStatus != "unpaid" && invStatus != "failed" {
+				return nil, &errs.Error{Code: errs.Conflict, Message: "لا يمكن بدء الدفع لهذه الفاتورة"}
+			}
 		}
 	}
 	// Config guards
