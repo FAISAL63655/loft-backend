@@ -221,9 +221,10 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 				if existingSession.Valid && existingSession.String != "" {
 					return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
 				}
-				// Zombie state: In progress but no session found. Self-heal by resetting to unpaid.
+				// Zombie state: In progress but no session found. Self-heal by resetting to unpaid AND failing pending payments.
 				logger.Info(ctx, "found zombie payment_in_progress invoice with no session, resetting", logger.Fields{"invoice_id": req.InvoiceID})
 				_, _ = db.Stdlib().ExecContext(ctx, `UPDATE invoices SET status='unpaid' WHERE id=$1`, req.InvoiceID)
+				_, _ = db.Stdlib().ExecContext(ctx, `UPDATE payments SET status='failed', updated_at=(CURRENT_TIMESTAMP AT TIME ZONE 'UTC') WHERE invoice_id=$1 AND status IN ('initiated','pending')`, req.InvoiceID)
 				invStatus = "unpaid" // Allow proceeding to create new session
 			}
 
