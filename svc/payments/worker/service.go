@@ -39,58 +39,58 @@ func init() {
 }
 
 type AdminPublishPaymentEventRequest struct {
-    GatewayRef string `json:"gateway_ref"`
-    Status     string `json:"status"`
-    Amount     int64  `json:"amount"`
-    Captured   int64  `json:"captured"`
-    Currency   string `json:"currency"`
-    InvoiceID  int64  `json:"invoice_id"`
+	GatewayRef string `json:"gateway_ref"`
+	Status     string `json:"status"`
+	Amount     int64  `json:"amount"`
+	Captured   int64  `json:"captured"`
+	Currency   string `json:"currency"`
+	InvoiceID  int64  `json:"invoice_id"`
 }
 
 type AdminPublishPaymentEventResponse struct {
-    Published bool   `json:"published"`
-    Message   string `json:"message"`
+	Published bool   `json:"published"`
+	Message   string `json:"message"`
 }
 
 //encore:api auth method=POST path=/admin/pubsub/payment-webhook/test
 func AdminPublishPaymentWebhookEvent(ctx context.Context, req *AdminPublishPaymentEventRequest) (*AdminPublishPaymentEventResponse, error) {
-    uidStr, ok := auth.UserID()
-    if !ok {
-        return nil, &errs.Error{Code: errs.Unauthenticated, Message: "مطلوب تسجيل الدخول"}
-    }
-    uid, _ := strconv.ParseInt(string(uidStr), 10, 64)
-    var role string
-    _ = db.Stdlib().QueryRowContext(ctx, `SELECT role::text FROM users WHERE id=$1`, uid).Scan(&role)
-    if strings.ToLower(role) != "admin" {
-        return nil, &errs.Error{Code: errs.Forbidden, Message: "يتطلب صلاحيات مدير"}
-    }
+	uidStr, ok := auth.UserID()
+	if !ok {
+		return nil, &errs.Error{Code: errs.Unauthenticated, Message: "مطلوب تسجيل الدخول"}
+	}
+	uid, _ := strconv.ParseInt(string(uidStr), 10, 64)
+	var role string
+	_ = db.Stdlib().QueryRowContext(ctx, `SELECT role::text FROM users WHERE id=$1`, uid).Scan(&role)
+	if strings.ToLower(role) != "admin" {
+		return nil, &errs.Error{Code: errs.Forbidden, Message: "يتطلب صلاحيات مدير"}
+	}
 
-    if req == nil {
-        req = &AdminPublishPaymentEventRequest{}
-    }
-    if strings.TrimSpace(req.Status) == "" {
-        req.Status = "captured"
-    }
-    if strings.TrimSpace(req.Currency) == "" {
-        req.Currency = "SAR"
-    }
-    if req.Amount == 0 {
-        req.Amount = 100
-    }
-    now := time.Now().UTC().Format(time.RFC3339)
-    evt := &PaymentEvent{
-        GatewayRef: strings.TrimSpace(req.GatewayRef),
-        Status:     strings.ToLower(req.Status),
-        Amount:     req.Amount,
-        Captured:   req.Captured,
-        Currency:   strings.ToUpper(req.Currency),
-        ReceivedAt: now,
-        InvoiceID:  req.InvoiceID,
-    }
-    if _, err := PaymentWebhookEvents.Publish(ctx, evt); err != nil {
-        return nil, &errs.Error{Code: errs.Internal, Message: fmt.Sprintf("فشل نشر الحدث: %v", err)}
-    }
-    return &AdminPublishPaymentEventResponse{Published: true, Message: "تم النشر"}, nil
+	if req == nil {
+		req = &AdminPublishPaymentEventRequest{}
+	}
+	if strings.TrimSpace(req.Status) == "" {
+		req.Status = "captured"
+	}
+	if strings.TrimSpace(req.Currency) == "" {
+		req.Currency = "SAR"
+	}
+	if req.Amount == 0 {
+		req.Amount = 100
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	evt := &PaymentEvent{
+		GatewayRef: strings.TrimSpace(req.GatewayRef),
+		Status:     strings.ToLower(req.Status),
+		Amount:     req.Amount,
+		Captured:   req.Captured,
+		Currency:   strings.ToUpper(req.Currency),
+		ReceivedAt: now,
+		InvoiceID:  req.InvoiceID,
+	}
+	if _, err := PaymentWebhookEvents.Publish(ctx, evt); err != nil {
+		return nil, &errs.Error{Code: errs.Internal, Message: fmt.Sprintf("فشل نشر الحدث: %v", err)}
+	}
+	return &AdminPublishPaymentEventResponse{Published: true, Message: "تم النشر"}, nil
 }
 
 //encore:service
@@ -210,6 +210,11 @@ func InitPayment(ctx context.Context, req *InitRequest) (*InitResponse, error) {
 		}
 		// Re-check after cleanup
 		if invStatus != "unpaid" && invStatus != "failed" {
+			// If we have an active session on the invoice, return it even if the key didn't match strictly.
+			// This handles cases where the initial session was created without a key or with a different flow.
+			if invStatus == "payment_in_progress" && existingSession.Valid && existingSession.String != "" {
+				return &InitResponse{Status: "pending", InvoiceID: req.InvoiceID, PaymentID: 0, SessionURL: existingSession.String}, nil
+			}
 			return nil, &errs.Error{Code: errs.Conflict, Message: "لا يمكن بدء الدفع لهذه الفاتورة"}
 		}
 	}
